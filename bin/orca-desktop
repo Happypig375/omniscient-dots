@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -e
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$ROOT/setup.sh" --env-only
+if [[ -d "$ROOT/state/remote-orca" ]]; then
+    python3 "$ROOT/remote-orca.py" resume
+fi
+# Avoid requiring FUSE in the sandbox. Keep Chromium's sandbox enabled.
+# Prefer dark appearance when Orca follows its default System theme.
+exec "$ROOT/bin/orca.AppImage" --appimage-extract-and-run --force-dark-mode "$@"

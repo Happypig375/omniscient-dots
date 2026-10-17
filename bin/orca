@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run the official bundled CLI, using Orca's own Electron/Node runtime.
+set -euo pipefail
+umask 077
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$ROOT/setup.sh" --env-only
+[[ -x "$ROOT/bin/orca.AppImage" ]] || { printf 'Run ./setup.sh to install Orca first.\n' >&2; exit 1; }
+digest=$(sha256sum "$ROOT/bin/orca.AppImage")
+digest=${digest%% *}
+cache="$ROOT/state/orca-cli-images/$digest"
+if [[ ! -x "$cache/resources/bin/orca-ide" ]]; then
+    mkdir -p "$ROOT/state/orca-cli-images"
+    temporary=$(mktemp -d "$ROOT/state/orca-cli-images/.extract.XXXXXX")
+    trap 'rm -rf -- "$temporary"' EXIT
+    (cd -- "$temporary"; "$ROOT/bin/orca.AppImage" --appimage-extract > /dev/null)
+    [[ -x "$temporary/squashfs-root/resources/bin/orca-ide" ]] || {
+        printf 'The Orca release does not contain the expected bundled CLI launcher.\n' >&2
+        exit 1
+    }
+    # Another invocation may have finished extracting this version meanwhile.
+    if [[ ! -d "$cache" ]]; then
+        mv -T -- "$temporary/squashfs-root" "$cache" || [[ -d "$cache" ]]
+    fi
+    rm -rf -- "$temporary"
+    trap - EXIT
+fi
+exec "$cache/resources/bin/orca-ide" "$@"

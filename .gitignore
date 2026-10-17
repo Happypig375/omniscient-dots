@@ -1,0 +1,13 @@
+# Track only the setup sources; ignore generated files and local settings.
+/*
+!/.gitignore
+!/setup.sh
+!/remote-orca.py
+!/README.md
+!/bin/
+
+# Keep the launchers, ignoring downloads and their adjacent persistent state.
+/bin/*
+!/bin/orca-desktop
+!/bin/orca
+!/bin/ssh

@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Run OpenSSH with local configuration and automatic userspace tailnet routing."""
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+
+ROOT = Path(__file__).resolve().parent.parent
+TAILSCALE = ROOT / 'bin/tailscale'
+PROXY_ADDRESS = ('127.0.0.1', 1055)
+TAILNETS = (ipaddress.ip_network('100.64.0.0/10'),
+            ipaddress.ip_network('fd7a:115c:a1e0::/48'))
+BEGIN = '# BEGIN automatic Tailscale SSH routing'
+END = '# END automatic Tailscale SSH routing'
+
+
+def tailnet_destination(host):
+    """Classify literals locally; resolve short peer names using daemon state."""
+    if len(host) > 253 or any(ord(character) < 33 or ord(character) > 126 for character in host):
+        return None
+    if host.startswith('[') and host.endswith(']'):
+        host = host[1:-1]
+    host = host.rstrip('.').lower()
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if address.version == 6 and address.scope_id is not None:
+            return None
+        return str(address) if any(address in network for network in TAILNETS) else None
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?', host):
+        return None
+    if host.endswith('.ts.net'):
+        # tailscaled's proxy resolves MagicDNS through its own network map.
+        return host
+    if '.' in host or host == 'localhost' or not TAILSCALE.is_file():
+        return None
+    try:
+        result = subprocess.run([str(TAILSCALE), 'status', '--json'], capture_output=True,
+                                text=True, timeout=1)
+        if result.returncode:
+            return None
+        status = json.loads(result.stdout)
+        peers = list((status.get('Peer') or {}).values()) + [status.get('Self') or {}]
+        matches = set()
+        for peer in peers:
+            name = peer.get('DNSName', '').rstrip('.').lower()
+            if host not in (name.split('.')[0], peer.get('HostName', '').lower()):
+                continue
+            for candidate in peer.get('TailscaleIPs') or []:
+                address = ipaddress.ip_address(candidate)
+                if any(address in network for network in TAILNETS):
+                    matches.add(str(address))
+                    break
+        return next(iter(matches)) if len(matches) == 1 else None
+    except (OSError, ValueError, AttributeError, TypeError, subprocess.TimeoutExpired):
+        return None
+
+
+def connect_proxy(host, port, proxy_address=PROXY_ADDRESS):
+    destination = tailnet_destination(host)
+    if not destination:
+        raise ValueError('Destination is not a Tailscale IP or recognized peer name.')
+    port = int(port)
+    if not 1 <= port <= 65535:
+        raise ValueError('SSH port must be between 1 and 65535.')
+    authority = f'[{destination}]:{port}' if ':' in destination else f'{destination}:{port}'
+    stream = socket.create_connection(proxy_address, timeout=20)
+    try:
+        stream.sendall(f'CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n'.encode('ascii'))
+        header = bytearray()
+        # Do not consume SSH banner bytes sent in the same packet as the reply.
+        while not header.endswith(b'\r\n\r\n'):
+            if len(header) >= 32768:
+                raise ValueError('Tailscale proxy response headers exceed 32 KiB.')
+            data = stream.recv(1)
+            if not data:
+                raise OSError('Tailscale proxy closed before completing CONNECT.')
+            header.extend(data)
+        status = bytes(header).split(b'\r\n', 1)[0]
+        if status.split()[1:2] != [b'200']:
+            raise OSError('Tailscale proxy refused CONNECT: ' + status.decode('ascii', errors='replace'))
+        stream.settimeout(None)
+        return stream
+    except BaseException:
+        stream.close()
+        raise
+
+
+def forward_stdio(stream):
+    def upload():
+        try:
+            while data := os.read(0, 65536):
+                stream.sendall(data)
+        except OSError:
+            pass
+        finally:
+            try:
+                stream.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+    threading.Thread(target=upload, daemon=True).start()
+    while data := stream.recv(65536):
+        remaining = memoryview(data)
+        while remaining:
+            remaining = remaining[os.write(1, remaining):]
+
+
+def write_private(path, contents):
+    if path.exists() and path.read_text() == contents:
+        path.chmod(0o600)
+        return
+    descriptor, temporary = tempfile.mkstemp(prefix='.config.', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w') as output:
+            output.write(contents)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def config_quote(value):
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def configure():
+    state = ROOT / 'state/ssh'
+    state.mkdir(parents=True, mode=0o700, exist_ok=True)
+    state.chmod(0o700)
+    config = state / 'config'
+    generated = state / 'tailscale.conf'
+    previous = config.read_text() if config.exists() else '# Local SSH client configuration.\nInclude ~/.ssh/config\n'
+    block_pattern = re.compile(r'(?ms)^' + re.escape(BEGIN) + r'\n.*?^' + re.escape(END) + r'(?:\n|$)')
+    if BEGIN in previous or END in previous:
+        if previous.count(BEGIN) != 1 or previous.count(END) != 1 or not block_pattern.search(previous):
+            raise ValueError('Check the automatic Tailscale routing markers in state/ssh/config.')
+        previous = block_pattern.sub('', previous)
+    # User settings run first. A fresh Match resets the scope left by an Include.
+    block = f'{BEGIN}\nMatch all\n    Include {config_quote(str(generated).replace("%", "%%"))}\nMatch all\n{END}\n'
+    prefix = shlex.join([sys.executable, str(Path(__file__).resolve())]).replace('%', '%%')
+    predicate = f"{prefix} --_tailscale-match '%h'"
+    proxy = f"{prefix} --_tailscale-connect '%h' '%p'"
+    write_private(generated, f'Match exec {config_quote(predicate)}\n    ProxyCommand {proxy}\nMatch all\n')
+    write_private(config, previous.rstrip('\n') + '\n\n' + block)
+    return config
+
+
+def main():
+    os.umask(0o077)
+    if sys.argv[1:2] == ['--_tailscale-match']:
+        return 0 if len(sys.argv) == 3 and tailnet_destination(sys.argv[2]) else 1
+    if sys.argv[1:2] == ['--_tailscale-connect']:
+        if len(sys.argv) != 4:
+            raise ValueError('The Tailscale SSH proxy requires a destination and port.')
+        with connect_proxy(sys.argv[2], sys.argv[3]) as stream:
+            forward_stdio(stream)
+        return 0
+    config = configure()
+    os.execv('/usr/bin/ssh', ['/usr/bin/ssh', '-F', str(config), *sys.argv[1:]])
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except (OSError, ValueError) as error:
+        print(f'SSH: {error}', file=sys.stderr)
+        sys.exit(1)
