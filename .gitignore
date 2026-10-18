@@ -3,6 +3,8 @@
 !/.gitignore
 !/setup.sh
 !/remote-orca.py
+!/authentication.py
+!/tests/
 !/README.md
 !/bin/
 
@@ -11,3 +13,5 @@
 !/bin/orca-desktop
 !/bin/orca
 !/bin/ssh
+
+/tests/__pycache__/

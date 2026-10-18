@@ -4,6 +4,7 @@
 # Reload just the environment: source ./setup.sh --env-only
 # Start or resume local Codex: ./setup.sh codex [<argument> ...]
 # Tailnet support: ./setup.sh remote import|share|pair|resume
+# Authentication backup: ./setup.sh auth save|restore [<file>]
 
 # The same file is sourced by ~/.bashrc and used as the optional shell rcfile.
 # Load the user's usual rcfile once before applying this environment.
@@ -78,6 +79,13 @@ fi
 set -Eeuo pipefail
 umask 077
 ROOT=$ORCA_DOTS_DIR
+
+authentication() {
+    local options=()
+    # An explicit migration selects its identity instead of the saved backup.
+    [[ -z ${TAILSCALE_STATE_FROM:-} ]] || options+=(--skip-tailscale)
+    python3 "$ROOT/authentication.py" "${options[@]}" "$@"
+}
 
 trust_browser_ca() (
     fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -728,6 +736,8 @@ if [[ ${1:-} == --help ]]; then
     cat <<'USAGE'
 Usage: ./setup.sh                                Full setup, remote import, and desktop launch
        ./setup.sh --tailscale-state-from <dir>   Full setup, importing a stopped daemon's state
+       ./setup.sh auth save [<file>]             Save authentication to one private file
+       ./setup.sh auth restore [<file>]          Restore missing authentication files
        ./setup.sh shell                          Configured interactive terminal
        ./setup.sh codex [<argument> ...]          Local Codex with persistent sessions
        ./setup.sh codex update                   Install or update the writable Codex CLI
@@ -750,6 +760,9 @@ keeping the current directory as its project. Full setup and codex save these de
 Local interactive Codex launches also use --no-daemon by default.
 Full setup updates Codex through OpenAI's installer, keeping its CLI and state here.
 Git commits default to the authenticated GitHub account's name and noreply email.
+Full setup restores missing credentials from state/authentication.json before login checks
+and saves credentials after authorization. Existing native credential files take precedence.
+Auth save/restore default to that file; <file> selects a different private backup file.
 State import is optional. <dir> must contain the stopped daemon's tailscaled.state;
 it is moved into this folder, preserving the existing tailnet identity.
 The destination address comes from the access link pasted at the prompt.
@@ -765,6 +778,11 @@ USAGE
 fi
 if [[ ${1:-} == shell ]]; then
     ORCA_DOTS_LOAD_BASHRC=1 exec bash --rcfile "$ROOT/setup.sh" -i
+fi
+if [[ ${1:-} == auth ]]; then
+    shift
+    authentication "$@"
+    exit
 fi
 if [[ ${1:-} == desktop && ${2:-} == diagnose && $# -eq 2 ]]; then
     diagnose_orca_desktop
@@ -824,7 +842,23 @@ if [[ ${1:-} == codex ]]; then
 fi
 if [[ ${1:-} == remote ]]; then
     shift
-    exec python3 "$ROOT/remote-orca.py" "$@"
+    remote_status=0
+    python3 "$ROOT/remote-orca.py" "$@" || remote_status=$?
+    case ${1:-} in
+        pair|import)
+            # Save even if the connection check failed after persisting a link.
+            save_remote_auth=1
+            for argument in "$@"; do
+                [[ $argument != --no-add ]] || save_remote_auth=0
+            done
+            if (( save_remote_auth )); then
+                if ! authentication --quiet save; then
+                    [[ $remote_status != 0 ]] || remote_status=1
+                fi
+            fi
+            ;;
+    esac
+    exit "$remote_status"
 fi
 TAILSCALE_STATE_FROM=''
 if [[ ${1:-} == --tailscale-state-from ]]; then
@@ -850,6 +884,7 @@ exec > >(tee -a "$SETUP_LOG") 2>&1
 logger_pid=$!
 SETUP_STAGE=initialization
 TMP=''
+AUTHENTICATION_READY=0
 log() { printf '[%(%Y-%m-%dT%H:%M:%S%z)T] [%s] %s\n' -1 "$SETUP_STAGE" "$*"; }
 stage() { SETUP_STAGE=$1; log 'Starting'; }
 fail() { log "ERROR at setup.sh line ${BASH_LINENO[0]}: $*" >&2; exit 1; }
@@ -857,6 +892,9 @@ finish() {
     local status=$?
     trap - EXIT
     set +e
+    if (( AUTHENTICATION_READY )); then
+        authentication save || log 'Could not refresh the authentication backup; the previous file was kept.'
+    fi
     [[ -z $TMP ]] || rm -rf -- "$TMP"
     log "Finished with exit status $status. Setup log: $SETUP_LOG"
     exec 1>&3 2>&4
@@ -872,7 +910,7 @@ log "Kernel and architecture: $(uname -srmo)"
 log "Bash: $BASH_VERSION"
 if command -v sha256sum >/dev/null; then
     log 'Input file SHA-256 hashes (contents are not logged):'
-    sha256sum "$ROOT/setup.sh" "$ROOT/remote-orca.py" "$ROOT/bin/orca-desktop" "$ROOT/bin/orca" "$ROOT/bin/ssh" /etc/environment
+    sha256sum "$ROOT/setup.sh" "$ROOT/remote-orca.py" "$ROOT/authentication.py" "$ROOT/bin/orca-desktop" "$ROOT/bin/orca" "$ROOT/bin/ssh" /etc/environment
 fi
 
 stage environment
@@ -896,6 +934,11 @@ stage credential-storage
 # Prevent environment tokens from hiding a missing persistent login.
 unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
 configure_codex
+stage authentication-restore
+authentication restore
+authentication save
+AUTHENTICATION_READY=1
+stage credential-storage
 log "Codex login, settings, sessions, history and database: $CODEX_HOME"
 log 'Codex uses Approve for me: workspace-write, on-request approvals, automatic review'
 log 'Local interactive Codex uses --no-daemon and reloads /etc/environment on each launch'
@@ -961,6 +1004,7 @@ fi
 gh auth status --hostname github.com >&3 2>&4
 [[ -s "$GH_CONFIG_DIR/hosts.yml" ]] || fail 'GitHub credentials were not persisted locally.'
 log 'GitHub authentication succeeded and credentials are persisted'
+authentication save
 stage github-git
 configure_github_git
 stage codex-update
@@ -977,6 +1021,7 @@ fi
 codex login status >&3 2>&4
 [[ -s "$CODEX_HOME/auth.json" ]] || fail 'Codex credentials were not persisted locally.'
 log 'Codex authentication succeeded and credentials are persisted'
+authentication save
 
 TMP=$(mktemp -d "$ROOT/.download.XXXXXX")
 stage tailscale-binaries
@@ -1015,6 +1060,8 @@ tailscale version
 stage tailscale-daemon
 # The fork stores its LocalAPI endpoint and tailnet state beside these binaries.
 configure_tailscale_state
+# The selected identity is now local; include it in subsequent backups.
+TAILSCALE_STATE_FROM=''
 if ! tailscale_status; then
     check_tailscale_proxy
     log "Starting tailscaled; daemon log: $ROOT/state/tailscaled.log"
@@ -1044,6 +1091,7 @@ then
 fi
 log 'Reading tailnet status'
 tailscale status
+authentication save
 stage orca-download
 if [[ ! -x "$ROOT/bin/orca.AppImage" ]]; then
     log 'Downloading stablyai/orca latest release asset: orca-linux.AppImage'

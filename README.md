@@ -88,6 +88,8 @@ brackets. Square brackets mark optional arguments.
 | `bash ./setup.sh` or `./setup.sh` | Full container setup, remote import, and desktop launch | First run; rerun to restore setup after a container restart or change |
 | `source ./setup.sh` | Full container setup and configure the current Bash terminal | Recommended first run; also installs settings for future Bash terminals |
 | `source ./setup.sh --env-only` | Reload only proxy and persistence settings | Automatic startup hooks and launchers; optional quick reload |
+| `./setup.sh auth save [<file>]` | Save authentication in one private file | Refresh the backup or export logins without running full setup |
+| `./setup.sh auth restore [<file>]` | Restore missing credential files | Recover logins from the default backup or a copied backup file |
 | `./setup.sh remote import [--no-add]` | Find tailnet Orca runtimes and add them using their access links | Add discovered servers by default; `--no-add` previews results |
 | `./setup.sh remote share` | Publish the running local Orca desktop to the tailnet | To let another computer connect here |
 | `./setup.sh remote pair <connection-name>` | Save and check a connection using a pasted access link | To connect to another Orca server; choose a local connection name |
@@ -239,6 +241,7 @@ clone alone does not restore them.
 
 | Location relative to this folder | Contents |
 | --- | --- |
+| `state/authentication.json` | Single private backup of user-authorized logins, Tailscale identity, and Orca server pairings |
 | `state/gh/` | GitHub CLI settings and file-based credentials (`GH_CONFIG_DIR`) |
 | `state/codex/` | Local Codex login, configuration, sessions, history, SQLite state, and logs (`CODEX_HOME`) |
 | `state/codex/packages/standalone/` | Codex CLI releases and the current version selected by OpenAI's installer |
@@ -275,6 +278,47 @@ state while the earlier daemon holds its LocalAPI lock.
 GitHub and standalone Codex credentials use private files. Keep this folder
 private. The `.gitignore` allowlist tracks only the setup sources, launchers, and
 this README, excluding all generated settings, credentials, binaries, and logs.
+
+### Authentication backup file
+
+Full setup restores missing credentials from `state/authentication.json` before
+checking logins, then refreshes that file after GitHub, Codex, and Tailscale
+authorization and when setup exits. A later setup failure therefore preserves
+logins already completed. Remote pairing and import commands also refresh the
+backup after saving a connection, even if its subsequent connection check fails.
+
+The file contains the GitHub CLI credential store, standalone Codex OAuth tokens
+(including refresh tokens), Tailscale's device identity, Orca pairing tokens,
+their server keys and local encryption identity, and the bridge addresses and
+ports needed to reuse saved connections. It preserves native credential files
+as base64-encoded data; this encoding is not encryption. The file has mode `600`,
+is ignored by Git, and contains no session history, profile databases, process
+IDs, profile locks, or LocalAPI connection files. Keep it private.
+
+To refresh the backup without repeating setup:
+
+```bash
+./setup.sh auth save
+```
+
+You can save to a specific file and restore from it in another checkout:
+
+```bash
+./setup.sh auth save /private/path/authentication.json
+./setup.sh auth restore /private/path/authentication.json
+```
+
+Restore fills missing files and keeps existing credentials, including newer
+OAuth refresh tokens. Save refreshes credentials present locally and retains
+backup entries whose source files are missing. To restore over an invalid native
+credential file, stop the application using it and move that specific file aside
+first. A missing Tailscale identity is restored only while its daemon's state
+lock is free. An explicit `--tailscale-state-from` migration takes precedence over
+the backed-up Tailscale identity. Restored credentials still need to be valid;
+setup requests authorization again when a service rejects them.
+
+Run the isolated authentication recovery checks with
+`python3 -m unittest discover -s tests -v`.
 
 ### GitHub identity for Git
 
@@ -667,6 +711,7 @@ chromium --proxy-server="$https_proxy" https://github.com/login/device
 | Source | Role |
 | --- | --- |
 | `setup.sh` | Terminal environment, Bash startup hook, browser CA trust, application setup, and command dispatch |
+| `authentication.py` | Save and restore the single private authentication backup file |
 | `remote-orca.py` | Tailnet forwarding, private pairing prompt with paste feedback, and outgoing bridges |
 | `bin/orca-desktop` | Reopens the desktop with the environment and saved bridges |
 | `bin/orca` | Runs the official CLI bundled in the downloaded AppImage |
