@@ -703,6 +703,16 @@ Orca and tailscaled append to `state/orca.log` and `state/tailscaled.log` across
 restarts. Application logs may contain separate authorization details.
 
 For diagnosis, share the failed stage and nearby output from the setup log.
+If `orca-settings` cannot acquire exclusive profile access, its output identifies
+the blocking lock owner and owner file. Lock records can remain under
+`bin/orca.AppImage.config/orca/.profile-state-access/` after a container restart.
+Orca may refuse to clear an old record when the hostname or PID namespace has
+changed, even with no Orca or orcad running in the current container. First verify
+that the recorded process has stopped on its original host or that the original
+container has stopped. Then back up and remove only the reported `.owner` file
+and rerun setup, repeating for any other confirmed stale owners. Keep the profile
+databases and any unverified lock records.
+
 Syntax and isolated browser-trust, launcher, and Tailscale lifecycle checks have
 been run here. Run setup in your external terminal to check real authorization,
 network access, and desktop behavior in that environment.

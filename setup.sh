@@ -620,9 +620,14 @@ function configure() {
 
 try {
     configure();
-} catch {
-    // Profile errors can include private payloads; log only the failed operation.
-    console.error(`Could not configure Orca desktop while ${phase}. Close Orca and orcad, then retry setup.`);
+} catch (error) {
+    console.error(`Could not configure Orca desktop while ${phase}.`);
+    if (error?.code === 'profile-state-access-refused') {
+        // Access errors contain lock ownership metadata, not saved profile payloads.
+        console.error(error.message);
+        console.error('Saved profile locks can survive a container restart. If the named owner belongs to a stopped container, back up and remove only that owner entry, then retry setup.');
+    }
+    // Other profile errors can include private payloads; do not log their contents.
     process.exitCode = 1;
 } finally {
     try {
