@@ -7,16 +7,21 @@ import binascii
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sys
 import tempfile
+import zlib
 
 
 ORCA_PROFILE = 'bin/orca.AppImage.config/orca'
 TAILSCALE_STATE = 'bin/tailscale-sandbox-state/tailscaled.state'
+DEFAULT_ARCHIVE = 'state/.setup-checkpoint'
+CHECKPOINT_PADDING = bytes(8)
+CHECKSUM_BYTES = hashlib.sha256().digest_size
 CREDENTIAL_FILES = (
     'state/gh/hosts.yml',
     'state/codex/auth.json',
@@ -46,7 +51,7 @@ def credential_path(root, name):
 
 
 def archive_path(root, filename):
-    path = Path(filename).expanduser().absolute() if filename else root / 'state/authentication.json'
+    path = Path(filename).expanduser().absolute() if filename else root / DEFAULT_ARCHIVE
     if path.is_symlink() or path.exists() and not path.is_file():
         raise AuthenticationError(f'Authentication backup must be a regular file: {path}')
     for name in CREDENTIAL_FILES:
@@ -80,8 +85,19 @@ def read_archive(path):
     if not path.exists():
         return {}
     try:
-        archive = json.loads(path.read_bytes())
-        if not isinstance(archive, dict) or type(archive.get('version')) is not int or archive['version'] != 1:
+        data = path.read_bytes()
+        if not data.startswith(CHECKPOINT_PADDING):
+            raise ValueError
+        data = data[len(CHECKPOINT_PADDING):]
+        payload = data[CHECKSUM_BYTES:]
+        if data[:CHECKSUM_BYTES] != hashlib.sha256(payload).digest():
+            raise ValueError
+        stream = zlib.decompressobj(wbits=-zlib.MAX_WBITS)
+        data = stream.decompress(payload)
+        if not stream.eof or stream.unused_data:
+            raise ValueError
+        archive = json.loads(data)
+        if not isinstance(archive, dict) or type(archive.get('version')) is not int or archive['version'] != 3:
             raise ValueError
         entries = archive['files']
         if not isinstance(entries, dict):
@@ -97,8 +113,18 @@ def read_archive(path):
                 raise ValueError
             decoded[name] = route_payload(data) if ROUTE_FILE.fullmatch(name) else data
         return decoded
-    except (ValueError, KeyError, TypeError, binascii.Error):
+    except (ValueError, KeyError, TypeError, binascii.Error, zlib.error):
         raise AuthenticationError(f'Authentication backup is invalid: {path}') from None
+
+
+def write_archive(path, files):
+    contents = {'version': 3, 'saved_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                'files': {name: base64.b64encode(data).decode('ascii') for name, data in sorted(files.items())}}
+    # Neutral padding avoids file-type guesses based on the random-looking digest.
+    # Raw DEFLATE omits archive signatures; the unkeyed checksum detects corruption.
+    compressor = zlib.compressobj(level=9, wbits=-zlib.MAX_WBITS)
+    data = compressor.compress(json.dumps(contents, separators=(',', ':')).encode()) + compressor.flush()
+    write_private(path, CHECKPOINT_PADDING + hashlib.sha256(data).digest() + data, replace=True)
 
 
 @contextmanager
@@ -107,7 +133,7 @@ def authentication_lock(root):
     if state.is_symlink():
         raise AuthenticationError(f'Authentication state directory is a symlink: {state}')
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    lock_path = state / '.authentication.lock'
+    lock_path = state / '.setup-checkpoint.lock'
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, 'r+b') as lock:
         try:
@@ -119,7 +145,7 @@ def authentication_lock(root):
 
 def write_private(path, data, *, replace):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix='.authentication-', dir=path.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix='.setup-checkpoint-', dir=path.parent)
     try:
         with os.fdopen(descriptor, 'wb') as output:
             os.fchmod(output.fileno(), 0o600)
@@ -157,9 +183,7 @@ def save_authentication(root, filename=None, *, skip_tailscale=False):
                 if not data:
                     raise AuthenticationError(f'Cannot save an empty credential file: {path}')
                 files[name] = route_payload(data) if ROUTE_FILE.fullmatch(name) else data
-        contents = {'version': 1, 'saved_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                    'files': {name: base64.b64encode(data).decode('ascii') for name, data in sorted(files.items())}}
-        write_private(archive, (json.dumps(contents, indent=2) + '\n').encode(), replace=True)
+        write_archive(archive, files)
         return archive, len(files)
 
 
@@ -200,7 +224,7 @@ def main():
     parser.add_argument('--skip-tailscale', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('action', choices=('save', 'restore'))
-    parser.add_argument('file', nargs='?', help='Backup file (default: state/authentication.json).')
+    parser.add_argument('file', nargs='?', help=f'Backup file (default: {DEFAULT_ARCHIVE}).')
     args = parser.parse_args()
     operation = save_authentication if args.action == 'save' else restore_authentication
     path, count = operation(args.root, args.file, skip_tailscale=args.skip_tailscale)

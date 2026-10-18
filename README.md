@@ -241,7 +241,7 @@ clone alone does not restore them.
 
 | Location relative to this folder | Contents |
 | --- | --- |
-| `state/authentication.json` | Single private backup of user-authorized logins, Tailscale identity, and Orca server pairings |
+| `state/.setup-checkpoint` | Single private backup of user-authorized logins, Tailscale identity, and Orca server pairings |
 | `state/gh/` | GitHub CLI settings and file-based credentials (`GH_CONFIG_DIR`) |
 | `state/codex/` | Local Codex login, configuration, sessions, history, SQLite state, and logs (`CODEX_HOME`) |
 | `state/codex/packages/standalone/` | Codex CLI releases and the current version selected by OpenAI's installer |
@@ -281,7 +281,7 @@ this README, excluding all generated settings, credentials, binaries, and logs.
 
 ### Authentication backup file
 
-Full setup restores missing credentials from `state/authentication.json` before
+Full setup restores missing credentials from `state/.setup-checkpoint` before
 checking logins, then refreshes that file after GitHub, Codex, and Tailscale
 authorization and when setup exits. A later setup failure therefore preserves
 logins already completed. Remote pairing and import commands also refresh the
@@ -290,10 +290,14 @@ backup after saving a connection, even if its subsequent connection check fails.
 The file contains the GitHub CLI credential store, standalone Codex OAuth tokens
 (including refresh tokens), Tailscale's device identity, Orca pairing tokens,
 their server keys and local encryption identity, and the bridge addresses and
-ports needed to reuse saved connections. It preserves native credential files
-as base64-encoded data; this encoding is not encryption. The file has mode `600`,
-is ignored by Git, and contains no session history, profile databases, process
-IDs, profile locks, or LocalAPI connection files. Keep it private.
+ports needed to reuse saved connections. It stores a compact binary snapshot
+using neutral binary padding, raw DEFLATE, and a SHA-256 checksum, without a
+standard archive signature. File paths, field names, and tokens are not readable
+at a glance. The checksum detects accidental corruption. This is obfuscation,
+not encryption: anyone with read access can decode it without a key. The file
+has mode `600`, is ignored by Git, and contains no session history, profile
+databases, process IDs, profile locks, or LocalAPI connection files. Keep it
+private.
 
 To refresh the backup without repeating setup:
 
@@ -304,8 +308,8 @@ To refresh the backup without repeating setup:
 You can save to a specific file and restore from it in another checkout:
 
 ```bash
-./setup.sh auth save /private/path/authentication.json
-./setup.sh auth restore /private/path/authentication.json
+./setup.sh auth save /private/path/portable.checkpoint
+./setup.sh auth restore /private/path/portable.checkpoint
 ```
 
 Restore fills missing files and keeps existing credentials, including newer
@@ -711,7 +715,7 @@ chromium --proxy-server="$https_proxy" https://github.com/login/device
 | Source | Role |
 | --- | --- |
 | `setup.sh` | Terminal environment, Bash startup hook, browser CA trust, application setup, and command dispatch |
-| `authentication.py` | Save and restore the single private authentication backup file |
+| `persistence.py` | Save and restore the single private checkpoint |
 | `remote-orca.py` | Tailnet forwarding, private pairing prompt with paste feedback, and outgoing bridges |
 | `bin/orca-desktop` | Reopens the desktop with the environment and saved bridges |
 | `bin/orca` | Runs the official CLI bundled in the downloaded AppImage |

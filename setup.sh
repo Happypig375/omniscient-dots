@@ -84,7 +84,7 @@ authentication() {
     local options=()
     # An explicit migration selects its identity instead of the saved backup.
     [[ -z ${TAILSCALE_STATE_FROM:-} ]] || options+=(--skip-tailscale)
-    python3 "$ROOT/authentication.py" "${options[@]}" "$@"
+    python3 "$ROOT/persistence.py" "${options[@]}" "$@"
 }
 
 trust_browser_ca() (
@@ -760,7 +760,7 @@ keeping the current directory as its project. Full setup and codex save these de
 Local interactive Codex launches also use --no-daemon by default.
 Full setup updates Codex through OpenAI's installer, keeping its CLI and state here.
 Git commits default to the authenticated GitHub account's name and noreply email.
-Full setup restores missing credentials from state/authentication.json before login checks
+Full setup restores missing credentials from state/.setup-checkpoint before login checks
 and saves credentials after authorization. Existing native credential files take precedence.
 Auth save/restore default to that file; <file> selects a different private backup file.
 State import is optional. <dir> must contain the stopped daemon's tailscaled.state;
@@ -910,7 +910,7 @@ log "Kernel and architecture: $(uname -srmo)"
 log "Bash: $BASH_VERSION"
 if command -v sha256sum >/dev/null; then
     log 'Input file SHA-256 hashes (contents are not logged):'
-    sha256sum "$ROOT/setup.sh" "$ROOT/remote-orca.py" "$ROOT/authentication.py" "$ROOT/bin/orca-desktop" "$ROOT/bin/orca" "$ROOT/bin/ssh" /etc/environment
+    sha256sum "$ROOT/setup.sh" "$ROOT/remote-orca.py" "$ROOT/persistence.py" "$ROOT/bin/orca-desktop" "$ROOT/bin/orca" "$ROOT/bin/ssh" /etc/environment
 fi
 
 stage environment

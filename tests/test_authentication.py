@@ -1,4 +1,3 @@
-import base64
 import fcntl
 import json
 import os
@@ -12,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import authentication as auth
+import persistence as auth
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -35,7 +34,7 @@ class AuthenticationTests(unittest.TestCase):
         return path
 
     def setup_command(self, *arguments):
-        for name in ('setup.sh', 'authentication.py'):
+        for name in ('setup.sh', 'persistence.py'):
             shutil.copyfile(REPO / name, self.root / name)
         return subprocess.run(['bash', str(self.root / 'setup.sh'), *arguments],
                               cwd=self.root, text=True, capture_output=True, timeout=15)
@@ -45,7 +44,7 @@ class AuthenticationTests(unittest.TestCase):
         # it touches ~/.bashrc, browser trust, networking, or application daemons.
         source = (REPO / 'setup.sh').read_text().split('stage bash-startup\n', 1)[0]
         self.write('setup.sh', (source + after_credentials).encode())
-        shutil.copyfile(REPO / 'authentication.py', self.root / 'authentication.py')
+        shutil.copyfile(REPO / 'persistence.py', self.root / 'persistence.py')
         self.write('remote-orca.py', b'# fixture\n')
         for name in ('gh', 'git', 'ssh', 'curl', 'tar', 'certutil', 'openssl', 'orca', 'orca-desktop'):
             path = self.write('bin/' + name, b'#!/bin/sh\nexit 0\n')
@@ -70,8 +69,12 @@ class AuthenticationTests(unittest.TestCase):
                      f'{auth.ORCA_PROFILE}/profiles/local-default/profile-state.db'):
             self.write(name, b'not authentication')
         archive, count = auth.save_authentication(self.root)
+        self.assertEqual(archive, self.root / auth.DEFAULT_ARCHIVE)
         self.assertEqual(count, len(original) + 1)
         self.assertEqual(stat.S_IMODE(archive.stat().st_mode), 0o600)
+        packed = archive.read_bytes()
+        for label in (b'auth', b'token', b'github', b'refresh', b'files', b'state/codex'):
+            self.assertNotIn(label, packed)
         entries = auth.read_archive(archive)
         self.assertEqual(set(entries), {*original, ROUTE})
         self.assertEqual(json.loads(entries[ROUTE]), {'remote_host': '100.64.0.2', 'remote_port': 6768, 'local_port': 12345})
@@ -102,22 +105,53 @@ class AuthenticationTests(unittest.TestCase):
         auth.save_authentication(self.root)
         self.assertEqual(auth.read_archive(archive), {CODEX: b'codex-authorized', GH: b'github-authorized'})
 
-    def test_invalid_archives_restore_nothing_and_do_not_leak_contents(self):
-        valid = base64.b64encode(b'secret-codex-token').decode()
+    @unittest.skipUnless(shutil.which('file'), 'file utility is unavailable')
+    def test_checkpoint_file_type_is_generic_data(self):
+        self.write(CODEX, b'PRIVATE_CURRENT_LOGIN')
+        archive, _ = auth.save_authentication(self.root)
+        result = subprocess.run(['file', '--brief', str(archive)],
+                                text=True, capture_output=True, check=True, timeout=5)
+        self.assertEqual(result.stdout.strip(), 'data')
+
+    def test_invalid_entries_restore_nothing_and_do_not_leak_contents(self):
+        valid = b'PRIVATE_CURRENT_LOGIN'
         invalid = [
-            {'version': 2, 'files': {CODEX: valid}},
-            {'version': 1, 'files': {CODEX: valid, '../escaped': valid}},
-            {'version': 1, 'files': {CODEX: valid, GH: 'PRIVATE_INVALID_BASE64!'}},
+            {CODEX: valid, '../escaped': valid},
+            {CODEX: valid, GH: b''},
+            {CODEX: valid, ROUTE: b'PRIVATE_INVALID_ROUTE'},
         ]
-        for value in invalid:
-            with self.subTest(value=value['version']):
-                archive = self.write('state/authentication.json', json.dumps(value).encode())
+        for index, files in enumerate(invalid):
+            with self.subTest(index=index):
+                archive = self.root / auth.DEFAULT_ARCHIVE
+                auth.write_archive(archive, files)
+                before = archive.read_bytes()
                 result = self.setup_command('auth', 'restore')
                 self.assertEqual(result.returncode, 1)
-                self.assertNotIn('PRIVATE_INVALID_BASE64', result.stderr)
-                self.assertNotIn('secret-codex-token', result.stderr)
+                self.assertNotIn('PRIVATE_', result.stdout + result.stderr)
                 self.assertFalse((self.root / CODEX).exists())
-                self.assertEqual(json.loads(archive.read_bytes()), value)
+                self.assertEqual(archive.read_bytes(), before)
+
+    def test_current_checkpoint_rejects_corruption_without_restoring_or_leaking(self):
+        path = self.write(CODEX, b'PRIVATE_CURRENT_LOGIN')
+        archive, _ = auth.save_authentication(self.root)
+        packed = archive.read_bytes()
+        path.unlink()
+        changed_payload = bytearray(packed)
+        changed_payload[-1] ^= 1
+        changed_digest = bytearray(packed)
+        changed_digest[16] ^= 1
+        changed_padding = bytearray(packed)
+        changed_padding[0] ^= 1
+        invalid = [packed[:31], packed[:-1], bytes(changed_payload), bytes(changed_digest),
+                   bytes(changed_padding), packed + b'extra']
+        for index, data in enumerate(invalid):
+            with self.subTest(index=index):
+                archive.write_bytes(data)
+                result = self.setup_command('auth', 'restore')
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn('PRIVATE_CURRENT_LOGIN', result.stdout + result.stderr)
+                self.assertFalse(path.exists())
+                self.assertEqual(archive.read_bytes(), data)
 
     def test_symlinks_are_not_read_or_replaced(self):
         external = self.write('outside', b'keep external token')
@@ -182,7 +216,7 @@ class AuthenticationTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 auth.save_authentication(self.root)
         self.assertEqual(archive.read_bytes(), before)
-        self.assertEqual(list(archive.parent.glob('.authentication-*')), [])
+        self.assertEqual(list(archive.parent.glob('.setup-checkpoint-*')), [])
 
     def test_restore_cannot_clobber_a_concurrent_login(self):
         path = self.write(CODEX, b'backed-up login')
@@ -207,11 +241,11 @@ class AuthenticationTests(unittest.TestCase):
 
     def test_shell_commands_export_and_restore_custom_file_without_outputting_tokens(self):
         path = self.write(GH, b'PRIVATE_GITHUB_TOKEN_FOR_TEST')
-        result = self.setup_command('auth', 'save', 'portable-auth.json')
+        result = self.setup_command('auth', 'save', 'portable.checkpoint')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('PRIVATE_GITHUB_TOKEN_FOR_TEST', result.stdout + result.stderr)
         path.unlink()
-        result = self.setup_command('auth', 'restore', 'portable-auth.json')
+        result = self.setup_command('auth', 'restore', 'portable.checkpoint')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(path.read_bytes(), b'PRIVATE_GITHUB_TOKEN_FOR_TEST')
 
@@ -230,7 +264,7 @@ class AuthenticationTests(unittest.TestCase):
         ).encode())
         result = self.setup_command('remote', 'pair', 'example')
         self.assertEqual(result.returncode, 7, result.stderr)
-        entries = auth.read_archive(self.root / 'state/authentication.json')
+        entries = auth.read_archive(self.root / auth.DEFAULT_ARCHIVE)
         self.assertIn(b'paired-before-check-failed', entries[ENVIRONMENTS])
         self.assertNotIn('paired-before-check-failed', result.stdout + result.stderr)
 
@@ -239,7 +273,7 @@ class AuthenticationTests(unittest.TestCase):
         result = self.setup_command('remote', 'import', '--no-add', '--json')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {'servers': []})
-        self.assertFalse((self.root / 'state/authentication.json').exists())
+        self.assertFalse((self.root / auth.DEFAULT_ARCHIVE).exists())
 
     def test_full_setup_restores_before_login_and_saves_on_later_failure(self):
         path = self.write(CODEX, b'backed-up-login')

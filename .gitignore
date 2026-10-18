@@ -3,7 +3,7 @@
 !/.gitignore
 !/setup.sh
 !/remote-orca.py
-!/authentication.py
+!/persistence.py
 !/tests/
 !/README.md
 !/bin/
