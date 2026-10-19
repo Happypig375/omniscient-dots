@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$ROOT/setup.sh" --env-only
+python3 "$ROOT/orca-locks.py" "$ORCA_USER_DATA_PATH"
 [[ -x "$ROOT/bin/orca.AppImage" ]] || { printf 'Run ./setup.sh to install Orca first.\n' >&2; exit 1; }
 digest=$(sha256sum "$ROOT/bin/orca.AppImage")
 digest=${digest%% *}

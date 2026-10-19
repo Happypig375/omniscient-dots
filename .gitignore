@@ -3,6 +3,8 @@
 !/.gitignore
 !/setup.sh
 !/remote-orca.py
+!/orca-locks.py
+!/orca-window.py
 !/persistence.py
 !/tests/
 !/README.md

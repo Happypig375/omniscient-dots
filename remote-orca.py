@@ -607,24 +607,24 @@ def resume():
 
 def main():
     os.umask(0o077)
-    STATE.mkdir(parents=True, mode=0o700, exist_ok=True)
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('share', help='Forward the running desktop runtime into the tailnet.')
-    commands.add_parser('resume', help='Restore saved outgoing loopback bridges.')
+    parser = argparse.ArgumentParser(prog='./setup.sh remote', description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True, metavar='{import,resume,share,pair}')
     importing = commands.add_parser('import', help='Find tailnet Orca runtimes and add them using access links.')
+    importing.add_argument('--no-add', action='store_true', help='Preview discovered servers without adding any.')
+    importing.add_argument('--json', action='store_true', help='Output JSON; requires --no-add.')
     importing.add_argument('--port', metavar='<port>', type=int, action='append',
                            help='Runtime port to probe; repeat for multiple ports. Default: 6768.')
     importing.add_argument('--timeout', metavar='<seconds>', type=float, default=5,
                            help='Per-probe deadline in seconds (default: 5, maximum: 60).')
-    importing.add_argument('--no-add', action='store_true', help='Preview discovered servers without adding any.')
-    importing.add_argument('--json', action='store_true', help='Output JSON; requires --no-add.')
+    commands.add_parser('resume', help='Restore saved outgoing loopback bridges.')
+    commands.add_parser('share', help='Forward the running desktop runtime into the tailnet.')
     pairing = commands.add_parser('pair', help='Save another server using its private access link.')
     pairing.add_argument('name', metavar='<connection-name>',
                          help='Your chosen local Orca connection name; the destination comes from the pasted access link.')
-    internal = commands.add_parser('_bridge', help=argparse.SUPPRESS)
+    internal = commands.add_parser('_bridge')
     internal.add_argument('route', metavar='<route-file>', type=Path)
     args = parser.parse_args()
+    STATE.mkdir(parents=True, mode=0o700, exist_ok=True)
     if args.command == '_bridge':
         bridge(args.route)
     elif args.command == 'share':

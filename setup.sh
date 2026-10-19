@@ -3,8 +3,8 @@
 # Reopen a configured terminal: ./setup.sh shell
 # Reload just the environment: source ./setup.sh --env-only
 # Start or resume local Codex: ./setup.sh codex [<argument> ...]
-# Tailnet support: ./setup.sh remote import|share|pair|resume
-# Authentication backup: ./setup.sh auth save|restore [<file>]
+# Tailnet support: ./setup.sh remote {import,resume,share,pair}
+# Checkpoint: ./setup.sh checkpoint {save,restore} [<file>]
 
 # The same file is sourced by ~/.bashrc and used as the optional shell rcfile.
 # Load the user's usual rcfile once before applying this environment.
@@ -80,11 +80,8 @@ set -Eeuo pipefail
 umask 077
 ROOT=$ORCA_DOTS_DIR
 
-authentication() {
-    local options=()
-    # An explicit migration selects its identity instead of the saved backup.
-    [[ -z ${TAILSCALE_STATE_FROM:-} ]] || options+=(--skip-tailscale)
-    python3 "$ROOT/persistence.py" "${options[@]}" "$@"
+checkpoint() {
+    python3 "$ROOT/persistence.py" "$@"
 }
 
 trust_browser_ca() (
@@ -259,83 +256,6 @@ p.chmod(0o600)
 PY
 }
 
-configure_tailscale_state() {
-    python3 - "$ROOT" "${TAILSCALE_STATE_FROM:-}" <<'PY'
-from contextlib import ExitStack
-from pathlib import Path
-import fcntl, os, sys, tempfile
-
-root = Path(sys.argv[1])
-local = root / 'bin' / 'tailscale-sandbox-state'
-if not sys.argv[2]:
-    if local.is_symlink():
-        sys.exit(f'Tailscale state at {local} is a symlink. '
-                 'Use --tailscale-state-from with its actual state directory to migrate it here.')
-    if local.exists() and not local.is_dir():
-        sys.exit(f'Cannot use Tailscale state directory: {local} is not a directory.')
-    sys.exit(0)
-shared = Path(sys.argv[2]).expanduser().absolute()
-# State stays physically inside this folder. Import an older identity only
-# when explicitly requested, after its daemon has stopped.
-if not (shared / 'tailscaled.state').is_file():
-    sys.exit(f'No saved Tailscale identity found in {shared}. Omit --tailscale-state-from for a fresh setup.')
-if not local.is_symlink() and local.resolve() == shared.resolve():
-    sys.exit(0)
-old_link = None
-if local.is_symlink():
-    if shared.is_symlink() or local.resolve() != shared.resolve():
-        sys.exit(f'Cannot migrate Tailscale state: {local} is managed elsewhere.')
-    old_link = os.readlink(local)
-elif (local / 'tailscaled.state').exists() or (local / 'tailscaled.state').is_symlink():
-    sys.exit(f'Local Tailscale state already exists in {local}; keep it or reconcile the two identities before importing.')
-if shared.is_symlink() or local.exists() and not local.is_dir():
-    sys.exit('Cannot migrate Tailscale state: an existing path is managed elsewhere.')
-if old_link is None and (shared.resolve() in local.resolve().parents or local.resolve() in shared.resolve().parents):
-    sys.exit('Cannot migrate Tailscale state between nested directories.')
-if shared.stat().st_dev != local.parent.stat().st_dev:
-    sys.exit('Tailscale state migration requires both folders on the same filesystem. '
-             'Stop the old daemon and copy its state into this folder before rerunning setup.')
-# The fork holds this lock for the lifetime of its LocalAPI listener. Holding
-# it across the move also preserves the lock inode for old-path clients.
-with ExitStack() as locks:
-    directories = [shared]
-    if old_link is None and local.exists():
-        directories.append(local)
-    for directory in directories:
-        lock = locks.enter_context((directory / 'localapi.json.lock').open('a+b'))
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit(f'A tailscaled is still using {directory}. '
-                     'Stop that specific daemon and wait for it to exit, then rerun setup '
-                     f'to move its state into {local}. Identify it with: ss -ltnp "sport = :1055".')
-    backup = None
-    if old_link is not None:
-        local.unlink()
-    elif local.exists():
-        backups = root / 'state' / 'tailscale-backups'
-        backups.mkdir(mode=0o700, parents=True, exist_ok=True)
-        backup = Path(tempfile.mkdtemp(prefix='previous-', dir=backups)) / local.name
-        local.rename(backup)
-    moved = False
-    try:
-        shared.rename(local)
-        moved = True
-        shared.symlink_to(local, target_is_directory=True)
-    except OSError:
-        if moved:
-            local.rename(shared)
-        if backup is not None:
-            backup.rename(local)
-        elif old_link is not None:
-            local.symlink_to(old_link, target_is_directory=True)
-        raise
-print(f'Tailscale state migrated into {local}; the old path now points here.')
-if backup is not None:
-    print(f'Previous local startup files preserved in {backup}')
-PY
-}
-
 tailscale_status() {
     # NeedsLogin and other stopped states may return a nonzero exit code while
     # still supplying valid status JSON. Error text alone does not mean ready.
@@ -445,29 +365,13 @@ def prepare_launch(root, timeout=20):
     instances = desktop_instances(profile, image)
     if not instances:
         return 0
-    print('Orca is already running with this folder\'s profile (PID '
-          + ', '.join(map(str, sorted(instances))) + ').', flush=True)
-    print('Relaunching loads the imported connections and closes the current desktop windows.', flush=True)
-    try:
-        with open('/dev/tty') as terminal:
-            print('Press Enter to relaunch Orca, or type skip to keep it running: ', end='', flush=True)
-            answer = terminal.readline()
-    except OSError:
-        answer = ''
-    if not answer or answer.strip():
-        print('Keeping the running Orca. Restart it later to load imported connections.', flush=True)
-        return 10
-    current = desktop_instances(profile, image)
-    if any(instances.get(pid) != started for pid, started in current.items()):
-        print('The running Orca instances changed while waiting. Rerun setup to review them.', file=sys.stderr)
-        return 1
-    for pid, started in current.items():
+    print('Closing Orca before relaunching...', flush=True)
+    for pid, started in instances.items():
         request_exit(pid, started)
-    print('Waiting for Orca to exit before relaunching...', flush=True)
     deadline = time.monotonic() + timeout
-    while any(process_start(pid) == started for pid, started in current.items()):
+    while any(process_start(pid) == started for pid, started in instances.items()):
         if time.monotonic() >= deadline:
-            print('Orca has not exited. Close it normally, then rerun setup.', file=sys.stderr)
+            print('Orca did not exit before the shutdown deadline.', file=sys.stderr)
             return 1
         time.sleep(0.2)
     if desktop_instances(profile, image):
@@ -486,6 +390,7 @@ PY
 }
 
 configure_orca_desktop() (
+    python3 "$ROOT/orca-locks.py" "$ORCA_USER_DATA_PATH"
     # Use the installed build's own profile schema, locks and SQLite writer.
     digest=$(sha256sum "$ROOT/bin/orca.AppImage")
     cache="$ROOT/state/orca-cli-images/${digest%% *}"
@@ -504,38 +409,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const {execFileSync} = require('node:child_process');
 const [out, userData] = process.argv.slice(2);
 let phase = 'loading the installed profile helpers';
 let maintenance, authority, temporary;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-
-function desktopWorkArea() {
-    if (!process.env.DISPLAY) return;
-    try {
-        // X11's work area excludes space reserved by desktop panels. Read the
-        // current workspace, rather than using the full screen or maximizing.
-        const output = execFileSync('xprop', ['-root', '-notype', '_NET_CURRENT_DESKTOP', '_NET_WORKAREA'], {
-            env: {...process.env, LC_ALL: 'C'}, encoding: 'utf8', timeout: 3000,
-            stdio: ['ignore', 'pipe', 'pipe']});
-        const current = output.match(/^_NET_CURRENT_DESKTOP = (\d+)\s*$/m);
-        const workAreas = output.match(/^_NET_WORKAREA = ([\d,\s-]+)$/m);
-        if (!current || !workAreas) return;
-        const values = workAreas[1].trim().split(/,\s*/).map(value =>
-            /^-?\d+$/.test(value) ? Number(value) : NaN);
-        const index = Number(current[1]) * 4;
-        if (values.length % 4 || !Number.isSafeInteger(index) || index < 0 || index + 4 > values.length) return;
-        const [x, y, width, height] = values.slice(index, index + 4);
-        const area = {x, y, width, height};
-        // Orca discards restored sizes at or below its minimum dimensions.
-        if (!record(area) || !['x', 'y', 'width', 'height'].every(key => Number.isSafeInteger(area[key]))
-            || area.width <= 600 || area.height <= 400) return;
-        return {x: area.x, y: area.y, width: area.width, height: area.height};
-    } catch {
-        // A missing display must not replace the user's saved geometry.
-        return;
-    }
-}
 
 function configure() {
     const profilePath = name => path.join(out, 'main/persistence/profile-state', name + '.js');
@@ -590,18 +467,10 @@ function configure() {
             flowVersion: ONBOARDING_FLOW_VERSION, closedAt: Date.now(), outcome: 'dismissed', lastCompletedStep: -1,
             checklist: {...defaults.checklist, ...(record(previous?.checklist) ? previous.checklist : {}), dismissed: true}});
     }
-    phase = 'reading the desktop work area';
-    const area = desktopWorkArea();
-    if (area) {
-        if (previousUI?.windowMaximized !== false || !record(previousUI?.windowBounds)
-            || Object.keys(area).some(key => previousUI.windowBounds[key] !== area[key])) {
-            updates.set('ui', {...(record(previousUI) ? previousUI : getDefaultUIState()),
-                windowBounds: area, windowMaximized: false});
-        }
-        console.log(`Orca window: ${area.width}x${area.height} at (${area.x}, ${area.y}), fitted above desktop panels.`);
-    } else {
-        console.log('Desktop work area unavailable; keeping Orca\'s saved window size.');
+    if (previousUI?.windowMaximized !== false) {
+        updates.set('ui', {...(record(previousUI) ? previousUI : getDefaultUIState()), windowMaximized: false});
     }
+    console.log('Orca window will be fitted and checked after launch.');
     if (!updates.size) return;
     phase = 'saving the desktop settings';
     if (state) {
@@ -633,7 +502,6 @@ try {
     if (error?.code === 'profile-state-access-refused') {
         // Access errors contain lock ownership metadata, not saved profile payloads.
         console.error(error.message);
-        console.error('Saved profile locks can survive a container restart. If the named owner belongs to a stopped container, back up and remove only that owner entry, then retry setup.');
     }
     // Other profile errors can include private payloads; do not log their contents.
     process.exitCode = 1;
@@ -648,145 +516,89 @@ try {
 JS
 )
 
-diagnose_orca_desktop() {
-    python3 - <<'PY'
-import os, re, shutil, subprocess, sys
-
-def query(*arguments):
-    try:
-        result = subprocess.run(arguments, capture_output=True, text=True, timeout=5,
-                                env={**os.environ, 'LC_ALL': 'C'})
-        return result.stdout if result.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-def property_value(text, name):
-    match = re.search(r'^' + re.escape(name) + r'(?: = |: )(.*)$', text, re.M)
-    return match[1] if match else None
-
-root = query('xprop', '-root', '-notype', '_NET_DESKTOP_GEOMETRY',
-             '_NET_CURRENT_DESKTOP', '_NET_WORKAREA', '_NET_SUPPORTING_WM_CHECK', '_NET_CLIENT_LIST')
-if root is None:
-    sys.exit('Cannot read the X11 display. Run this command in the desktop\'s terminal.')
-print('Desktop geometry and reserved panel space:')
-for line in root.splitlines():
-    if line.startswith(('_NET_DESKTOP_GEOMETRY', '_NET_CURRENT_DESKTOP', '_NET_WORKAREA')):
-        print(line)
-area = None
-try:
-    current = int(property_value(root, '_NET_CURRENT_DESKTOP'))
-    areas = [int(value.strip()) for value in (property_value(root, '_NET_WORKAREA') or '').split(',')]
-    selected = areas[current * 4:current * 4 + 4] if current >= 0 else []
-    if len(selected) == 4:
-        area = selected
-except (TypeError, ValueError):
-    pass
-manager = property_value(root, '_NET_SUPPORTING_WM_CHECK')
-if manager:
-    identifier = re.search(r'0x[0-9a-fA-F]+', manager)
-    if identifier:
-        name = query('xprop', '-id', identifier[0], '-notype', '_NET_WM_NAME')
-        if name:
-            print('Window manager: ' + name.strip())
-windows = property_value(root, '_NET_CLIENT_LIST') or ''
-found = False
-for identifier in re.findall(r'0x[0-9a-fA-F]+', windows):
-    properties = query('xprop', '-id', identifier, '-notype', 'WM_CLASS', '_NET_WM_STATE',
-                       '_NET_FRAME_EXTENTS', '_GTK_FRAME_EXTENTS', 'WM_NORMAL_HINTS',
-                       '_NET_WM_WINDOW_TYPE', '_NET_WM_STRUT', '_NET_WM_STRUT_PARTIAL')
-    if properties and '_NET_WM_WINDOW_TYPE_DOCK' in properties:
-        print('\nDesktop panel ' + identifier + ':')
-        for line in properties.splitlines():
-            if line.startswith(('WM_CLASS', '_NET_WM_WINDOW_TYPE', '_NET_WM_STRUT')):
-                print(line)
-    if not properties or not re.search(r'orca', property_value(properties, 'WM_CLASS') or '', re.I):
-        continue
-    found = True
-    print('\nOrca window ' + identifier + ':')
-    print(properties.strip())
-    geometry = query('xwininfo', '-id', identifier)
-    values = []
-    for label in ('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height'):
-        match = re.search(r'^\s*' + label + r':\s*(-?\d+)\s*$', geometry or '', re.M)
-        if not match:
-            break
-        values.append(int(match[1]))
-    if len(values) == 4:
-        x, y, width, height = values
-        print(f'Window bounds: {width}x{height} at ({x}, {y})')
-        if area:
-            ax, ay, aw, ah = area
-            print(f'Gap inside work area: left={x-ax}, top={y-ay}, '
-                  f'right={ax+aw-x-width}, bottom={ay+ah-y-height} pixels')
-if not found:
-    print('\nNo visible Orca window found. Run this while Orca is maximized to inspect the gap.')
-if shutil.which('xfconf-query'):
-    settings = query('xfconf-query', '-c', 'xfwm4', '-lv')
-    if settings:
-        print('\nWindow manager margin and frame settings from this terminal\'s settings service:')
-        for line in settings.splitlines():
-            if re.match(r'/general/(?:margin_|borderless_maximize|titleless_maximize|maximized_offset|frame_border)', line.lstrip()):
-                print(line)
-    else:
-        print('\nWindow manager settings are unavailable on this terminal\'s session bus.')
-PY
-}
-
-if [[ ${1:-} == --help ]]; then
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
     cat <<'USAGE'
-Usage: ./setup.sh                                Full setup, remote import, and desktop launch
-       ./setup.sh --tailscale-state-from <dir>   Full setup, importing a stopped daemon's state
-       ./setup.sh auth save [<file>]             Save authentication to one private file
-       ./setup.sh auth restore [<file>]          Restore missing authentication files
-       ./setup.sh shell                          Configured interactive terminal
-       ./setup.sh codex [<argument> ...]          Local Codex with persistent sessions
-       ./setup.sh codex update                   Install or update the writable Codex CLI
-       ./setup.sh desktop diagnose               Inspect Orca window gaps and desktop panel space
-       ./setup.sh remote share                   Share this running Orca desktop
-       ./setup.sh remote pair <connection-name>  Save a remote Orca connection
-       ./setup.sh remote import [--no-add] [--port <port>] [--timeout <seconds>]
-                                                Find and add Orca runtimes on the tailnet
-       ./setup.sh remote resume                  Restart saved forwarding bridges
-       ./setup.sh --help                         Show this help
-       source ./setup.sh                         Full setup and configure this terminal
-       source ./setup.sh --env-only              Reload only the environment
+Usage: ./setup.sh
+       ./setup.sh <command> [<argument> ...]
 
-Replace <connection-name> with your chosen Orca connection name, <port> with a
-runtime port (default: 6768), and <seconds> with a probe timeout (default: 5),
-omitting the angle brackets. Square brackets mark optional arguments;
-<argument> values are passed to Codex. Repeat --port to check multiple ports.
-Local Codex uses Approve for me: workspace-write with automatic approval review,
-keeping the current directory as its project. Full setup and codex save these defaults.
-Local interactive Codex launches also use --no-daemon by default.
-Full setup updates Codex through OpenAI's installer, keeping its CLI and state here.
-Git commits default to the authenticated GitHub account's name and noreply email.
-Full setup restores missing credentials from state/.setup-checkpoint before login checks
-and saves credentials after authorization. Existing native credential files take precedence.
-Auth save/restore default to that file; <file> selects a different private backup file.
-State import is optional. <dir> must contain the stopped daemon's tailscaled.state;
-it is moved into this folder, preserving the existing tailnet identity.
-The destination address comes from the access link pasted at the prompt.
-Use bin/orca environment list, bin/orca serve, and bin/tailscale serve status
-directly for their native commands.
-Full setup imports remote servers before opening the desktop, prompting for access links.
-If Orca is already running here, press Enter to relaunch it or type skip to keep it running.
-Orca's first-run onboarding is dismissed before launching the desktop.
-Its window fits the current desktop work area, leaving panels visible without maximization.
-Run ./setup.sh remote import --no-add to preview; add --json for machine-readable results.
+Default setup (no command):
+  ./setup.sh                                Full setup and desktop launch
+  source ./setup.sh                         Also configure this Bash terminal
+
+  Steps in execution order, with commands for running individual steps:
+    1. Load the environment, check requirements, and restore files from the checkpoint.
+       source ./setup.sh --env-only         Reload only the environment
+       ./setup.sh checkpoint restore [<file>]
+                                            Restore missing files from a checkpoint
+
+    2. Configure Bash startup and browser CA trust.
+
+    3. Check the GitHub login, refresh the checkpoint, and configure Git.
+
+    4. Install or update Codex, check its login, and refresh the checkpoint.
+       ./setup.sh codex update              Install or update the writable Codex CLI
+
+    5. Install or reuse Tailscale, connect the tailnet, and refresh the checkpoint.
+       Then install or reuse Orca.
+
+    6. Close the desktop and clear stale locks when no Orca process is running.
+
+    7. Reuse checkpoint connections; import servers only when starting without a checkpoint.
+       ./setup.sh remote import [--no-add] [--json]
+                                [--port <port>]... [--timeout <seconds>]
+                                            Discover and add tailnet Orca servers
+       Run remote import separately to add servers after restoring a checkpoint.
+       Use --no-add to preview; --json requires --no-add. Repeat --port to probe
+       more ports (default: 6768). Timeouts default to 5 seconds, maximum 60.
+
+    8. Dismiss onboarding, resume bridges, launch Orca, and fit and verify its window.
+       ./setup.sh remote resume             Restart saved forwarding bridges
+       ./setup.sh desktop fit [--window <window-id>] [--timeout <seconds>]
+                                            Fit and verify Orca's visible window
+
+    9. Save the checkpoint on exit, including if setup fails.
+       ./setup.sh checkpoint save [<file>]  Refresh or export the checkpoint
+
+  The checkpoint is state/.omniscient-dots-checkpoint. Existing native files take
+  precedence. Setup initializes it after restore and refreshes it after logins
+  and when it exits.
+  Checkpoint commands use this default unless <file> is supplied.
+  Git commits use your GitHub account's name and private noreply email.
+
+Additional commands:
+  ./setup.sh shell                          Open a configured interactive Bash
+  ./setup.sh codex [<argument> ...]         Run local Codex with persistent sessions
+  ./setup.sh remote share                   Share the running Orca desktop
+  ./setup.sh remote pair <connection-name>  Save a connection from a pasted access link
+  ./setup.sh desktop diagnose               Inspect Orca window gaps and panel space
+  ./setup.sh --help                         Show this help (also -h)
+
+  Local Codex keeps the current directory as its project and uses Approve for me:
+  workspace-write with automatic approval review. Full setup and codex save these
+  defaults. Local interactive launches also use --no-daemon by default.
+  For native server commands, use bin/orca environment list, bin/orca serve,
+  and bin/tailscale serve status.
+
+Syntax:
+  <value> is a placeholder; [...] is optional; {...,...} lists choices;
+  ... repeats the preceding argument. Omit these markers in actual commands.
+  <connection-name> is your chosen local name; the pasted link supplies its address.
+  <argument> values are passed to Codex. Paths containing spaces must be quoted.
+  Add --help to checkpoint, remote, or desktop commands for their full syntax.
 USAGE
     exit
 fi
 if [[ ${1:-} == shell ]]; then
     ORCA_DOTS_LOAD_BASHRC=1 exec bash --rcfile "$ROOT/setup.sh" -i
 fi
-if [[ ${1:-} == auth ]]; then
+if [[ ${1:-} == checkpoint ]]; then
     shift
-    authentication "$@"
+    checkpoint "$@"
     exit
 fi
-if [[ ${1:-} == desktop && ${2:-} == diagnose && $# -eq 2 ]]; then
-    diagnose_orca_desktop
-    exit
+if [[ ${1:-} == desktop ]]; then
+    shift
+    exec python3 "$ROOT/orca-window.py" --profile "$ORCA_USER_DATA_PATH" "$@"
 fi
 if [[ ${1:-} == codex ]]; then
     shift
@@ -844,30 +656,29 @@ if [[ ${1:-} == remote ]]; then
     shift
     remote_status=0
     python3 "$ROOT/remote-orca.py" "$@" || remote_status=$?
+    # Help and argument errors do not change connections or the checkpoint.
+    [[ $remote_status != 2 ]] || exit "$remote_status"
+    for argument in "$@"; do
+        case "$argument" in
+            --) break ;;
+            -h|--help) exit "$remote_status" ;;
+        esac
+    done
     case ${1:-} in
         pair|import)
             # Save even if the connection check failed after persisting a link.
-            save_remote_auth=1
+            save_remote_checkpoint=1
             for argument in "$@"; do
-                [[ $argument != --no-add ]] || save_remote_auth=0
+                [[ $argument != --no-add ]] || save_remote_checkpoint=0
             done
-            if (( save_remote_auth )); then
-                if ! authentication --quiet save; then
+            if (( save_remote_checkpoint )); then
+                if ! checkpoint --quiet save; then
                     [[ $remote_status != 0 ]] || remote_status=1
                 fi
             fi
             ;;
     esac
     exit "$remote_status"
-fi
-TAILSCALE_STATE_FROM=''
-if [[ ${1:-} == --tailscale-state-from ]]; then
-    if [[ $# -ne 2 || -z ${2:-} ]]; then
-        printf 'Usage: ./setup.sh --tailscale-state-from <state-directory>\n' >&2
-        exit 2
-    fi
-    TAILSCALE_STATE_FROM=$2
-    shift 2
 fi
 if (( $# )); then
     printf 'Unknown setup argument: %s\nRun ./setup.sh --help for usage. Pair servers with ./setup.sh remote pair <connection-name>.\n' "$1" >&2
@@ -884,7 +695,7 @@ exec > >(tee -a "$SETUP_LOG") 2>&1
 logger_pid=$!
 SETUP_STAGE=initialization
 TMP=''
-AUTHENTICATION_READY=0
+CHECKPOINT_READY=0
 log() { printf '[%(%Y-%m-%dT%H:%M:%S%z)T] [%s] %s\n' -1 "$SETUP_STAGE" "$*"; }
 stage() { SETUP_STAGE=$1; log 'Starting'; }
 fail() { log "ERROR at setup.sh line ${BASH_LINENO[0]}: $*" >&2; exit 1; }
@@ -892,8 +703,8 @@ finish() {
     local status=$?
     trap - EXIT
     set +e
-    if (( AUTHENTICATION_READY )); then
-        authentication save || log 'Could not refresh the authentication backup; the previous file was kept.'
+    if (( CHECKPOINT_READY )); then
+        checkpoint save || log 'Could not refresh the checkpoint; the previous file was kept.'
     fi
     [[ -z $TMP ]] || rm -rf -- "$TMP"
     log "Finished with exit status $status. Setup log: $SETUP_LOG"
@@ -910,7 +721,7 @@ log "Kernel and architecture: $(uname -srmo)"
 log "Bash: $BASH_VERSION"
 if command -v sha256sum >/dev/null; then
     log 'Input file SHA-256 hashes (contents are not logged):'
-    sha256sum "$ROOT/setup.sh" "$ROOT/remote-orca.py" "$ROOT/persistence.py" "$ROOT/bin/orca-desktop" "$ROOT/bin/orca" "$ROOT/bin/ssh" /etc/environment
+    sha256sum "$ROOT/setup.sh" "$ROOT/remote-orca.py" "$ROOT/orca-locks.py" "$ROOT/orca-window.py" "$ROOT/persistence.py" "$ROOT/bin/orca-desktop" "$ROOT/bin/orca" "$ROOT/bin/ssh" /etc/environment
 fi
 
 stage environment
@@ -934,10 +745,13 @@ stage credential-storage
 # Prevent environment tokens from hiding a missing persistent login.
 unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
 configure_codex
-stage authentication-restore
-authentication restore
-authentication save
-AUTHENTICATION_READY=1
+stage checkpoint-restore
+# Remember the starting state before save creates a checkpoint on the first run.
+SETUP_FROM_CHECKPOINT=0
+[[ ! -f "$ROOT/state/.omniscient-dots-checkpoint" ]] || SETUP_FROM_CHECKPOINT=1
+checkpoint restore
+checkpoint save
+CHECKPOINT_READY=1
 stage credential-storage
 log "Codex login, settings, sessions, history and database: $CODEX_HOME"
 log 'Codex uses Approve for me: workspace-write, on-request approvals, automatic review'
@@ -1004,7 +818,7 @@ fi
 gh auth status --hostname github.com >&3 2>&4
 [[ -s "$GH_CONFIG_DIR/hosts.yml" ]] || fail 'GitHub credentials were not persisted locally.'
 log 'GitHub authentication succeeded and credentials are persisted'
-authentication save
+checkpoint save
 stage github-git
 configure_github_git
 stage codex-update
@@ -1021,7 +835,7 @@ fi
 codex login status >&3 2>&4
 [[ -s "$CODEX_HOME/auth.json" ]] || fail 'Codex credentials were not persisted locally.'
 log 'Codex authentication succeeded and credentials are persisted'
-authentication save
+checkpoint save
 
 TMP=$(mktemp -d "$ROOT/.download.XXXXXX")
 stage tailscale-binaries
@@ -1059,9 +873,10 @@ fi
 tailscale version
 stage tailscale-daemon
 # The fork stores its LocalAPI endpoint and tailnet state beside these binaries.
-configure_tailscale_state
-# The selected identity is now local; include it in subsequent backups.
-TAILSCALE_STATE_FROM=''
+tailscale_state="$ROOT/bin/tailscale-sandbox-state"
+if [[ -L $tailscale_state || ( -e $tailscale_state && ! -d $tailscale_state ) ]]; then
+    fail "Tailscale state must be a local directory: $tailscale_state"
+fi
 if ! tailscale_status; then
     check_tailscale_proxy
     log "Starting tailscaled; daemon log: $ROOT/state/tailscaled.log"
@@ -1091,7 +906,7 @@ then
 fi
 log 'Reading tailnet status'
 tailscale status
-authentication save
+checkpoint save
 stage orca-download
 if [[ ! -x "$ROOT/bin/orca.AppImage" ]]; then
     log 'Downloading stablyai/orca latest release asset: orca-linux.AppImage'
@@ -1111,22 +926,25 @@ printf 'To reload this terminal without repeating setup, source ./setup.sh --env
 printf 'Use ./setup.sh shell for a configured child terminal.\n'
 printf 'Use ./setup.sh codex to start Codex, or ./setup.sh codex resume to reopen a saved session.\n'
 # Finish every interactive setup step before the desktop can take focus.
-stage remote-import
-log 'Finding tailnet Orca servers; paste their access links at the terminal prompts'
-# Keep interactive pairing output and credentials out of the setup log.
-python3 "$ROOT/remote-orca.py" import >&3 2>&4
-printf 'To let other computers connect here, run ./setup.sh remote share.\n'
-stage orca-startup
-if prepare_orca_launch >&3 2>&4; then
-    stage orca-settings
-    configure_orca_desktop
-    stage orca-startup
-    printf 'Launching Orca with the imported connections; its child terminals inherit the proxy and login paths.\n'
-    log 'Appending to the Orca application log'
-    nohup "$ROOT/bin/orca-desktop" >> "$ROOT/state/orca.log" 2>&1 < /dev/null &
-    printf 'Orca PID: %s; log: %s/state/orca.log\n' "$!" "$ROOT"
+stage orca-shutdown
+prepare_orca_launch >&3 2>&4 || fail 'Could not close Orca before relaunching it.'
+python3 "$ROOT/orca-locks.py" "$ORCA_USER_DATA_PATH"
+stage remote-connections
+if (( SETUP_FROM_CHECKPOINT )); then
+    log 'Reusing checkpoint connections; skipping discovery of additional Orca servers'
+    log 'To discover and add servers, run ./setup.sh remote import.'
 else
-    launch_status=$?
-    [[ $launch_status == 10 ]] || fail "Could not prepare the Orca launch (exit status $launch_status); see the terminal output."
-    log 'Kept the existing Orca desktop running'
+    log 'Finding tailnet Orca servers; paste their access links at the terminal prompts'
+    # Keep interactive pairing output and credentials out of the setup log.
+    python3 "$ROOT/remote-orca.py" import >&3 2>&4
 fi
+printf 'To let other computers connect here, run ./setup.sh remote share.\n'
+stage orca-settings
+configure_orca_desktop
+stage orca-startup
+printf 'Launching Orca with the saved connections; its child terminals inherit the proxy and login paths.\n'
+log 'Appending to the Orca application log'
+nohup "$ROOT/bin/orca-desktop" >> "$ROOT/state/orca.log" 2>&1 < /dev/null &
+printf 'Orca PID: %s; log: %s/state/orca.log\n' "$!" "$ROOT"
+stage orca-window
+python3 "$ROOT/orca-window.py" --profile "$ORCA_USER_DATA_PATH" fit

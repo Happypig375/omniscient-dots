@@ -2,7 +2,7 @@
 
 Set up Orca, persistent GitHub and Codex logins, and bidirectional Remote Orca
 Server connections over a Tailscale tailnet. These scripts target a Linux x86_64
-container and load its proxy and CA configuration from `/etc/environment`.
+environment and load its proxy and CA configuration from `/etc/environment`.
 
 ## Start here
 
@@ -18,21 +18,23 @@ source ./setup.sh
 **No parameters are required.** Setup prepares browser CA trust, reuses or obtains
 GitHub and Codex logins, configures Git with your GitHub identity and credentials,
 installs a Bash startup hook, installs or updates Codex, downloads the Tailscale
-fork and Orca AppImage, connects the tailnet, runs remote import, and then launches
-the Orca desktop with the saved connections. Paste access links for discovered
-servers when prompted, or press Enter to skip them. Reruns reuse saved logins and
+fork and Orca AppImage, connects the tailnet, and launches the Orca desktop with
+the saved connections. When a checkpoint exists at startup, setup reuses its
+connections without scanning for additions. Run `./setup.sh remote import`
+separately to discover and add servers. On the first run without a checkpoint,
+setup imports servers before launching Orca; paste their access links when
+prompted, or press Enter to skip them. Reruns reuse saved logins and
 Tailscale and Orca binaries; Codex checks the latest stable release on each run.
-If Orca is already running with this folder's profile, setup asks you to press
-Enter to relaunch it with the imported connections, or type
-`skip` to keep it running.
+If Orca is already running with this folder's profile, setup sends SIGTERM and
+waits for it to exit before relaunching it automatically. When no Orca process is
+running, setup and the launchers delete stale profile locks before opening the
+profile.
 Before launching, setup dismisses Orca's first-run onboarding wizard. Existing
-completed or dismissed onboarding stays as saved. Setup also fits the window
-to the current desktop's usable area, leaving the bottom bar and other panels
-visible. It uses explicit bounds with maximization off, avoiding the margins
-that this environment can add to maximized windows. Other profile settings are
-preserved. These changes are made after any running desktop has exited.
+completed or dismissed onboarding stays as saved. After launching Orca, setup
+clears maximization, fits the actual window above the bottom bar and other
+panels, and verifies its visible bounds. Other profile settings are preserved.
 Sourcing also configures your current terminal. `bash ./setup.sh` (or
-`./setup.sh`) performs the same container setup.
+`./setup.sh`) performs the same setup.
 
 Complete any GitHub, Codex, and Tailscale authorization prompts. For GitHub, copy
 the device code and press Enter to open the browser in this environment. Restart
@@ -49,7 +51,7 @@ authentication, and `user@IP` arguments are unnecessary for these connections.
 
 ### Prerequisites
 
-- A Linux x86_64 container, with a graphical display for the desktop.
+- A Linux x86_64 environment, with an X11 display for the desktop.
 - Bash, preinstalled `gh`, `git`, and OpenSSH (`/usr/bin/ssh`), Python 3.11 or
   newer, `curl`, `tar`, `openssl`, `certutil`, and the usual coreutils commands.
   On Debian, `certutil` comes from `libnss3-tools`.
@@ -75,35 +77,90 @@ Tailscale daemon.
 ## Commands
 
 `setup.sh` handles environment loading, Bash startup configuration, browser CA
-trust, and application setup. Both `bash ./setup.sh` and `source ./setup.sh`
-perform the full setup for this container. Sourcing also applies the environment
-to the calling terminal. Subcommands run only their selected action; they do not
-repeat the full setup.
+trust, and application setup. Use `./setup.sh` to run full setup; `bash ./setup.sh`
+is equivalent. Use `source ./setup.sh` to also configure the calling Bash terminal.
+Subcommands run their selected action separately.
 
 Replace placeholders in angle brackets with the described value, omitting the
-brackets. Square brackets mark optional arguments.
+brackets. Square brackets mark optional arguments, braces list choices, and a
+trailing `...` permits repetition. Omit these syntax markers when running commands
+and quote paths containing spaces. For example, use
+`./setup.sh checkpoint save "/private/path with spaces/portable.checkpoint"`.
+
+### Default setup
 
 | Command | Purpose | When needed |
 | --- | --- | --- |
-| `bash ./setup.sh` or `./setup.sh` | Full container setup, remote import, and desktop launch | First run; rerun to restore setup after a container restart or change |
-| `source ./setup.sh` | Full container setup and configure the current Bash terminal | Recommended first run; also installs settings for future Bash terminals |
-| `source ./setup.sh --env-only` | Reload only proxy and persistence settings | Automatic startup hooks and launchers; optional quick reload |
-| `./setup.sh auth save [<file>]` | Save authentication in one private file | Refresh the backup or export logins without running full setup |
-| `./setup.sh auth restore [<file>]` | Restore missing credential files | Recover logins from the default backup or a copied backup file |
-| `./setup.sh remote import [--no-add]` | Find tailnet Orca runtimes and add them using their access links | Add discovered servers by default; `--no-add` previews results |
-| `./setup.sh remote share` | Publish the running local Orca desktop to the tailnet | To let another computer connect here |
-| `./setup.sh remote pair <connection-name>` | Save and check a connection using a pasted access link | To connect to another Orca server; choose a local connection name |
-| `./setup.sh remote resume` | Restart saved outgoing forwarding bridges | Optional recovery; the desktop launcher also does this |
+| `./setup.sh` | Full setup and desktop launch | First run; rerun to restore setup after a restart or change |
+| `source ./setup.sh` | Full setup and configure the current Bash terminal | Recommended first run; also installs settings for future Bash terminals |
+
+Full setup runs these steps in order. Commands listed with a step run that part
+separately:
+
+1. **Environment and checkpoint.** Load the environment, check requirements, and
+   restore missing files from the checkpoint.
+
+   `source ./setup.sh --env-only` reloads the environment.
+   `./setup.sh checkpoint restore [<file>]` restores missing files.
+
+2. **Bash and browser trust.** Configure startup hooks and the browser CA trust.
+
+3. **GitHub and Git.** Check the GitHub login, refresh the checkpoint, and
+   configure Git's identity and credential helper.
+
+4. **Codex.** Install or update the CLI, check its login, and refresh the checkpoint.
+
+   `./setup.sh codex update` installs or updates Codex separately.
+
+5. **Tailscale and Orca.** Install or reuse Tailscale, connect the tailnet, and
+   refresh the checkpoint. Then install or reuse Orca.
+
+6. **Orca shutdown and locks.** Close the desktop and clear stale locks when no
+   Orca process is running.
+
+7. **Saved connections.** Reuse checkpoint connections. Discover and add servers
+   automatically only when setup starts without a checkpoint.
+
+   `./setup.sh remote import [--no-add] [--json] [--port <port>]... [--timeout <seconds>]`
+   discovers and adds servers separately. Use `--no-add` to preview; `--json`
+   requires it. Run this command to add servers after restoring a checkpoint.
+
+8. **Orca launch and window fit.** Dismiss onboarding, resume bridges, launch
+   Orca, and fit and verify its visible window above desktop panels.
+
+   `./setup.sh remote resume` restarts saved outgoing forwarding bridges.
+   `./setup.sh desktop fit [--window <window-id>] [--timeout <seconds>]` refits an
+   open window, waiting up to 20 seconds for it to appear by default.
+
+9. **Checkpoint save.** Save on exit, including if setup fails,
+   so completed logins and connections remain recoverable.
+
+   `./setup.sh checkpoint save [<file>]` refreshes or exports the checkpoint.
+
+Setup also initializes the checkpoint just after restoring it. Checkpoint commands
+use `state/.omniscient-dots-checkpoint` unless `<file>` is supplied.
+
+### Additional commands
+
+| Command | Purpose | When needed |
+| --- | --- | --- |
 | `./setup.sh shell` | Open an interactive Bash with this environment loaded | When you want proxy and persistence settings in a new terminal |
 | `./setup.sh codex [<argument> ...]` | Run this folder's Codex with local persistent storage | For standalone Codex, including `codex resume` |
-| `./setup.sh codex update` | Install or update the writable Codex CLI | Update Codex without repeating logins or desktop setup |
-| `./setup.sh --help` | Show command usage | Optional reference |
+| `./setup.sh remote share` | Publish the running local Orca desktop to the tailnet | To let another computer connect here |
+| `./setup.sh remote pair <connection-name>` | Save and check a connection using a pasted access link | To connect to another Orca server; choose a local connection name |
+| `./setup.sh desktop diagnose` | Inspect Orca window gaps and desktop panel space | Diagnose window geometry |
+| `./setup.sh --help` | Show grouped command usage (`-h` also works) | Optional reference |
 
-Full setup runs `remote import` automatically. For bidirectional desktop use,
-also run `remote share`. Use `remote pair <connection-name>` to add a particular
-access link manually with a chosen name. The remaining remote helpers handle discovery
-and userspace Tailscale routing. Use Orca's native CLI for server management and
-headless serving. The former `ssh-config` mode and positional SSH targets are removed.
+Use `./setup.sh checkpoint --help`, `./setup.sh remote --help`, or
+`./setup.sh desktop --help` for their full syntax. Add `--help` after an action
+for its options, for example
+`./setup.sh remote import --help`. Help leaves saved state unchanged.
+
+For bidirectional desktop use, also run `./setup.sh remote share`. Use
+`./setup.sh remote pair <connection-name>` to add a particular access link manually
+with a chosen name. The remaining remote helpers handle discovery and userspace
+Tailscale routing. Use Orca's native CLI for server management and headless serving.
+The former `ssh-config` mode and positional SSH targets are removed.
 Existing SSH configuration and backups from earlier runs are left untouched.
 
 ## Terminal environment
@@ -118,7 +175,7 @@ loading if this folder's `setup.sh` is unavailable. The hook's explicit
 `--env-only` argument loads settings without repeating logins, CA imports, or
 application startup whenever a terminal opens.
 
-Sourcing performs full container setup, including installing the startup hook,
+Sourcing performs full setup, including installing the startup hook,
 and keeps the environment in the current terminal:
 
 ```bash
@@ -185,22 +242,41 @@ flag. This applies when Orca's theme is set to System; an explicit Light or Dark
 selection in Orca takes precedence. Fully quit Orca and reopen it through
 `bin/orca-desktop` to apply the launcher preference.
 
-On this X11 desktop, each full setup uses `xprop` to refresh Orca's saved window
-bounds from the current workspace's work area, excluding space reserved by
-panels. It uses no fixed resolution. If the display or its work area cannot be
-queried, setup keeps the saved size. Later `bin/orca-desktop` launches restore
-the saved bounds; rerun setup to fit them after changing the desktop size.
+On this X11 desktop, each full setup waits for Orca's window to appear, restores
+it if minimized, clears maximization, and resizes it to its monitor's available
+area. The target comes from monitor dimensions and actual panel reservations.
+The full panel reservation is preserved, including padding around floating docks.
+Window-manager maximization margins do not reduce this target. The helper uses
+X11 pixels, accounts for frame and invisible border sizes, and checks the final
+visible edges after the window settles. It reports success only when they match.
+Orca saves the resulting geometry through its normal window events.
+
+To refit an already-open Orca window without repeating setup:
+
+```bash
+./setup.sh desktop fit
+```
+
+The helper prefers a window matching this setup's profile. When process metadata
+is unavailable, it can select a single Orca window or the main window of one Orca
+process. Minimized windows and windows on another workspace can be restored.
+To choose a particular Orca window, use `--window <window-id>` with a hexadecimal
+or decimal ID reported by the diagnostic command below. IDs change when windows
+close or Orca restarts; omit `--window` to find the current window automatically.
 
 To investigate gaps around a maximized window, run this in the desktop's terminal
-while Orca is maximized:
+while Orca is open:
 
 ```bash
 ./setup.sh desktop diagnose
 ```
 
-It reports the desktop work area, panel reservations, actual Orca window bounds,
-space left at each edge, frame extents, size hints, and available Xfwm margin
-settings. It leaves the window and desktop settings unchanged.
+It reports monitor geometry, the reported maximization work area, actual panel
+reservations, all Orca window candidates and their profile matches, client and
+visible window bounds, unused pixels at each edge, frame extents, and size hints.
+Use `diagnose --window <window-id>` to inspect a specific ID and any reason it
+cannot be selected.
+It leaves window and desktop settings unchanged.
 
 ### Local SSH commands
 
@@ -241,7 +317,7 @@ clone alone does not restore them.
 
 | Location relative to this folder | Contents |
 | --- | --- |
-| `state/.setup-checkpoint` | Single private backup of user-authorized logins, Tailscale identity, and Orca server pairings |
+| `state/.omniscient-dots-checkpoint` | Single private checkpoint of saved logins, Tailscale identity, and Orca server pairings |
 | `state/gh/` | GitHub CLI settings and file-based credentials (`GH_CONFIG_DIR`) |
 | `state/codex/` | Local Codex login, configuration, sessions, history, SQLite state, and logs (`CODEX_HOME`) |
 | `state/codex/packages/standalone/` | Codex CLI releases and the current version selected by OpenAI's installer |
@@ -252,40 +328,30 @@ clone alone does not restore them.
 | `bin/orca.AppImage.config/orca/` | Orca portable profile: application settings, managed accounts, session metadata, and remote server grants (`ORCA_USER_DATA_PATH`) |
 | `state/config/`, `state/data/`, `state/cache/` | Other XDG configuration, data, and caches |
 | `state/browser-trust/` | Persistent Chromium/Electron NSS certificate databases |
-| `state/tailscale-backups/` | Previous startup files preserved when migrating existing Tailscale state |
 | `state/bashrc-backups/` | Backups of Bash startup settings taken before hook updates |
 | `state/remote-orca/` | Saved forwarding routes, discovery results, and remote-operation logs |
 | `state/orca-cli-images/` | Extracted, version-specific bundled Orca CLI |
 | `state/logs/`, `state/orca.log`, `state/tailscaled.log` | Setup and application diagnostics |
-| `bin/`, beside the Tailscale binaries | Tailnet state and LocalAPI connection details maintained by the fork |
+| `bin/tailscale-sandbox-state/` | Tailnet identity and LocalAPI connection details maintained by the fork |
 
-An empty local Tailscale state directory is a fresh setup; it does not require
-migration. Setup initializes state here and requests a tailnet login as needed.
-To preserve an older installation's identity, stop its daemon, wait for it to
-exit, and explicitly select its state directory:
-
-```bash
-./setup.sh --tailscale-state-from /path/to/previous/tailscale-sandbox-state
-```
-
-Setup moves the selected state into this folder's `bin/tailscale-sandbox-state/`
-and leaves the old path pointing here, so both installations' clients can reach
-the same daemon. The authoritative state stays inside this folder. An existing
-local identity is preserved; reconcile it before importing a different identity.
-Unused local startup files are backed up before migration. Setup refuses to move
-state while the earlier daemon holds its LocalAPI lock.
+Setup reuses the local Tailscale identity or restores a missing identity from the
+checkpoint. Without either, it initializes state in
+`bin/tailscale-sandbox-state/` and requests a tailnet login as needed. Use the
+checkpoint described below to recover this setup's logins and pairings together.
 
 GitHub and standalone Codex credentials use private files. Keep this folder
 private. The `.gitignore` allowlist tracks only the setup sources, launchers, and
 this README, excluding all generated settings, credentials, binaries, and logs.
 
-### Authentication backup file
+### Checkpoint file
 
-Full setup restores missing credentials from `state/.setup-checkpoint` before
+Full setup restores missing credentials from `state/.omniscient-dots-checkpoint` before
 checking logins, then refreshes that file after GitHub, Codex, and Tailscale
 authorization and when setup exits. A later setup failure therefore preserves
 logins already completed. Remote pairing and import commands also refresh the
-backup after saving a connection, even if its subsequent connection check fails.
+checkpoint after saving a connection, even if its subsequent connection check fails.
+Setup from an existing checkpoint skips discovery of additional Orca servers;
+use `./setup.sh remote import` to add them separately.
 
 The file contains the GitHub CLI credential store, standalone Codex OAuth tokens
 (including refresh tokens), Tailscale's device identity, Orca pairing tokens,
@@ -299,29 +365,28 @@ has mode `600`, is ignored by Git, and contains no session history, profile
 databases, process IDs, profile locks, or LocalAPI connection files. Keep it
 private.
 
-To refresh the backup without repeating setup:
+To refresh the checkpoint without repeating setup:
 
 ```bash
-./setup.sh auth save
+./setup.sh checkpoint save
 ```
 
 You can save to a specific file and restore from it in another checkout:
 
 ```bash
-./setup.sh auth save /private/path/portable.checkpoint
-./setup.sh auth restore /private/path/portable.checkpoint
+./setup.sh checkpoint save /private/path/portable.checkpoint
+./setup.sh checkpoint restore /private/path/portable.checkpoint
 ```
 
 Restore fills missing files and keeps existing credentials, including newer
 OAuth refresh tokens. Save refreshes credentials present locally and retains
-backup entries whose source files are missing. To restore over an invalid native
+checkpoint entries whose source files are missing. To restore over an invalid native
 credential file, stop the application using it and move that specific file aside
 first. A missing Tailscale identity is restored only while its daemon's state
-lock is free. An explicit `--tailscale-state-from` migration takes precedence over
-the backed-up Tailscale identity. Restored credentials still need to be valid;
+lock is free. Restored credentials still need to be valid;
 setup requests authorization again when a service rejects them.
 
-Run the isolated authentication recovery checks with
+Run the isolated checkpoint recovery checks with
 `python3 -m unittest discover -s tests -v`.
 
 ### GitHub identity for Git
@@ -500,19 +565,20 @@ Keep Orca running on both computers for the desktop flow. In Orca's settings,
 
 ### Import servers from the tailnet
 
-Full setup runs this automatically before launching the desktop. This keeps the
-terminal available for setup prompts and lets Orca load the saved connections
-when it opens. To repeat import separately:
+Full setup runs this automatically only when it starts without a checkpoint.
+Setup from an existing checkpoint reuses saved connections and skips scanning
+for additions. To discover and add servers separately:
 
 ```bash
 ./setup.sh remote import
 ```
 
-After import, full setup detects desktop instances using this folder's profile.
-Press Enter at the relaunch prompt to request their normal exit and wait up to
-20 seconds before starting Orca again. Type `skip` to leave the existing desktop
-running. CLI commands, headless servers, and other profiles are excluded. If Orca
-does not exit, close it normally and rerun setup.
+Full setup automatically closes desktop instances using this folder's profile
+with SIGTERM and waits up to 20 seconds for them to exit before opening the
+profile and relaunching Orca. CLI commands, headless servers, and other profiles
+are excluded from shutdown. Lock files and profile owner records are deleted
+only when no Orca process is running. Discovery can also be run independently
+with the command above.
 
 This lists visible, online Tailscale IPv4 peers and checks their default Orca
 runtime port, `6768`, through this container's Tailscale proxy. A successful Orca
@@ -545,7 +611,7 @@ tailnet and allow the connection through its firewall and tailnet policy.
 Discovery identifies reachable runtimes; the access link authorizes pairing.
 The command does not obtain links from other computers or change their grants.
 Results and import outcomes are saved in `state/remote-orca/discovery.json`.
-Discovery runs during full setup and when you run `remote import` explicitly;
+Discovery runs during setup without a checkpoint and when you run `remote import` explicitly;
 importing does not install a background scanner.
 
 ### Machine name and connection name
@@ -626,8 +692,8 @@ interface. Incoming connections use Tailscale Serve. Outgoing Orca connections
 use a background bridge from a private loopback port through tailscaled's HTTP
 CONNECT proxy on `127.0.0.1:1055`.
 
-Setup reuses a daemon reachable through its state directory, including migrated
-state, and prints the client and running daemon versions. If that daemon
+Setup reuses a daemon reachable through its local state directory and prints the
+client and running daemon versions. If that daemon
 cannot be reached but port 1055 is occupied, setup reports the conflict before
 starting another instance.
 
@@ -716,6 +782,8 @@ chromium --proxy-server="$https_proxy" https://github.com/login/device
 | --- | --- |
 | `setup.sh` | Terminal environment, Bash startup hook, browser CA trust, application setup, and command dispatch |
 | `persistence.py` | Save and restore the single private checkpoint |
+| `orca-locks.py` | Clear stale profile locks when no Orca process is running |
+| `orca-window.py` | Fit and verify the mapped X11 window above desktop panels; report window geometry |
 | `remote-orca.py` | Tailnet forwarding, private pairing prompt with paste feedback, and outgoing bridges |
 | `bin/orca-desktop` | Reopens the desktop with the environment and saved bridges |
 | `bin/orca` | Runs the official CLI bundled in the downloaded AppImage |
@@ -752,15 +820,9 @@ Orca and tailscaled append to `state/orca.log` and `state/tailscaled.log` across
 restarts. Application logs may contain separate authorization details.
 
 For diagnosis, share the failed stage and nearby output from the setup log.
-If `orca-settings` cannot acquire exclusive profile access, its output identifies
-the blocking lock owner and owner file. Lock records can remain under
-`bin/orca.AppImage.config/orca/.profile-state-access/` after a container restart.
-Orca may refuse to clear an old record when the hostname or PID namespace has
-changed, even with no Orca or orcad running in the current container. First verify
-that the recorded process has stopped on its original host or that the original
-container has stopped. Then back up and remove only the reported `.owner` file
-and rerun setup, repeating for any other confirmed stale owners. Keep the profile
-databases and any unverified lock records.
+Setup closes the running desktop automatically before changing its profile.
+When no Orca process is running, setup and both launchers remove stale lock files,
+Chromium singleton links, and `.profile-state-access/` owner records automatically.
 
 Syntax and isolated browser-trust, launcher, and Tailscale lifecycle checks have
 been run here. Run setup in your external terminal to check real authorization,
@@ -779,9 +841,8 @@ Replacing a running Tailscale daemon requires a brief reconnect. To switch to
 the already-installed `bin/tailscaled`, identify the process listening on 1055
 with `ss -ltnp 'sport = :1055'`, stop that specific process with `kill -TERM <pid>`,
 and rerun setup after it exits. Preserve `tailscale-sandbox-state/` so the new
-process retains the tailnet identity and saved configuration. Use
-`--tailscale-state-from` only when deliberately importing another installation's
-saved identity; setup does not automatically stop or upgrade a running daemon.
+process retains the tailnet identity and saved configuration. Setup does not
+automatically stop or upgrade a running daemon.
 When fetching a newer fork release, replace the downloaded
 binaries while retaining this state directory.
 
