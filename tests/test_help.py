@@ -73,6 +73,14 @@ class HelpTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                 self.assertFalse((self.root / 'state').exists())
 
+    def test_setup_requires_a_profile_without_a_terminal(self):
+        for arguments in ((), ('--profile',), ('--profile', 'unknown'),
+                          ('--profile', 'worker', 'extra')):
+            with self.subTest(arguments=arguments):
+                result = self.setup_command(*arguments)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertFalse((self.root / 'state').exists())
+
     def test_removed_tailscale_import_options_do_not_change_state(self):
         previous = self.directory / 'previous tailnet state'
         previous.mkdir()

@@ -50,7 +50,7 @@ class CheckpointTests(unittest.TestCase):
         for name in ('gh', 'git', 'ssh', 'curl', 'tar', 'certutil', 'openssl', 'orca', 'orca-desktop'):
             path = self.write('bin/' + name, b'#!/bin/sh\nexit 0\n')
             path.chmod(0o700)
-        return subprocess.run(['bash', str(self.root / 'setup.sh'), *arguments],
+        return subprocess.run(['bash', str(self.root / 'setup.sh'), '--profile', 'both', *arguments],
                               cwd=self.root, text=True, capture_output=True, timeout=15)
 
     def setup_through_remote_connections(self):

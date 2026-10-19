@@ -15,7 +15,17 @@ cd /path/to/omniscient-dots
 source ./setup.sh
 ```
 
-**No parameters are required.** Setup prepares browser CA trust, reuses or obtains
+**No parameters are required in an interactive terminal.** Setup first asks which
+tools to configure: **Worker** (Codex, GitHub CLI login, and Git authentication),
+**Supervisor** (Tailscale and Orca), or **Both** (the default). To skip the prompt,
+including in scripts, use `./setup.sh --profile worker`,
+`./setup.sh --profile supervisor`, or `./setup.sh --profile both`. Supervisor
+setup uses preinstalled `gh` for public downloads without requiring GitHub login.
+All choices configure Bash startup, browser CA trust, and checkpoints; checkpoint
+restore can restore saved state for any tools. Worker setup finishes without
+starting Tailscale or launching Orca.
+
+With Both selected, setup prepares browser CA trust, reuses or obtains
 GitHub and Codex logins, configures Git with your GitHub identity and credentials,
 installs a Bash startup hook, installs or updates Codex, downloads the Tailscale
 fork and Orca AppImage, connects the tailnet, and launches the Orca desktop with
@@ -37,7 +47,8 @@ Sourcing also configures your current terminal. `bash ./setup.sh` (or
 `./setup.sh`) performs the same setup.
 
 Complete any GitHub, Codex, and Tailscale authorization prompts. For GitHub, copy
-the device code and press Enter to open the browser in this environment. Restart
+the device code and press Enter to open the browser in this environment. Browser
+output is suppressed so it does not interrupt the authorization prompts. Restart
 an already-open browser after setup imports the proxy CA. If the browser cannot
 open, use `https://github.com/login/device` in another browser. For Codex, open
 the printed device link in your normal browser outside this environment and
@@ -694,8 +705,17 @@ CONNECT proxy on `127.0.0.1:1055`.
 
 Setup reuses a daemon reachable through its local state directory and prints the
 client and running daemon versions. If that daemon
-cannot be reached but port 1055 is occupied, setup reports the conflict before
-starting another instance.
+cannot be reached but port 1055 is occupied, setup identifies a same-user
+`tailscaled` owning that loopback listener. It derives its LocalAPI endpoint and
+state path from process flags or the executable location, then verifies the
+endpoint with `tailscale status --json`. Setup stops that daemon, waits for it
+to exit, and copies its state into this folder before starting the local daemon.
+The original state remains intact, and any previous local state is moved into
+`state/tailscale-state-before-migration-*/` for recovery. Runtime endpoint and
+lock files are excluded. Subsequent checkpoint saves include the migrated identity.
+If the listener or state cannot be identified safely, setup reports the conflict.
+Do not restart the original daemon after migration: continue using this folder's
+copy of the device identity.
 
 Pairing replaces only the access link's endpoint with the loopback endpoint;
 Orca's token and pinned encryption key remain intact. This helper accepts private

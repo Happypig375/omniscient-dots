@@ -158,6 +158,27 @@ trust_browser_ca() (
     printf 'Trust databases persist in %s/state/browser-trust/.\n' "$ROOT"
 )
 
+login_github() (
+    # gh's browser child otherwise inherits the terminal used for device prompts.
+    local browser_dir
+    browser_dir=$(mktemp -d "$ROOT/.github-browser.XXXXXX")
+    trap 'rm -rf -- "$browser_dir"' EXIT
+    cat > "$browser_dir/open" <<'SH'
+#!/usr/bin/env bash
+if [[ -n ${ORCA_LOGIN_GH_BROWSER:-} ]]; then
+    export GH_BROWSER=$ORCA_LOGIN_GH_BROWSER
+else
+    unset GH_BROWSER
+fi
+# Reuse gh's browser selection, including BROWSER and the platform default.
+# Redirect before starting the browser so its descendants stay quiet as well.
+exec gh browse "$@" </dev/null >/dev/null 2>&1
+SH
+    chmod 700 "$browser_dir/open"
+    ORCA_LOGIN_GH_BROWSER=${GH_BROWSER:-} GH_BROWSER="\"$browser_dir/open\"" \
+        gh auth login --hostname github.com --git-protocol https --web --insecure-storage
+)
+
 configure_github_git() (
     local git_config="$XDG_CONFIG_HOME/git/config" identity
     identity=$(gh api --hostname github.com user --jq '{login, id, name}')
@@ -518,14 +539,21 @@ JS
 
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
     cat <<'USAGE'
-Usage: ./setup.sh
+Usage: ./setup.sh [--profile {worker,supervisor,both}]
        ./setup.sh <command> [<argument> ...]
 
 Default setup (no command):
-  ./setup.sh                                Full setup and desktop launch
+  ./setup.sh                                Ask which tools to configure
+  ./setup.sh --profile worker               Codex, GitHub login, Git authentication
+  ./setup.sh --profile supervisor           Tailscale and Orca (no worker logins)
+  ./setup.sh --profile both                 All tools and desktop launch
   source ./setup.sh                         Also configure this Bash terminal
 
-  Steps in execution order, with commands for running individual steps:
+  Without --profile, choose Worker, Supervisor, or Both (default) interactively.
+  Noninteractive setup requires --profile. Common setup includes Bash startup,
+  browser CA trust, and checkpoints. Supervisor downloads require preinstalled gh.
+
+  Steps for Both in execution order, with commands for running individual steps:
     1. Load the environment, check requirements, and restore files from the checkpoint.
        source ./setup.sh --env-only         Reload only the environment
        ./setup.sh checkpoint restore [<file>]
@@ -680,10 +708,42 @@ if [[ ${1:-} == remote ]]; then
     esac
     exit "$remote_status"
 fi
+SETUP_PROFILE=''
+if [[ ${1:-} == --profile && $# == 2 ]]; then
+    case "$2" in
+        worker|supervisor|both) SETUP_PROFILE=$2; shift 2 ;;
+        *) printf 'Invalid profile: %s (choose worker, supervisor, or both).\n' "$2" >&2; exit 2 ;;
+    esac
+fi
 if (( $# )); then
     printf 'Unknown setup argument: %s\nRun ./setup.sh --help for usage. Pair servers with ./setup.sh remote pair <connection-name>.\n' "$1" >&2
     exit 2
 fi
+
+# Choose before logging, restoring checkpoints, or changing tool configuration.
+if [[ -z $SETUP_PROFILE ]]; then
+    if [[ ! -t 0 ]]; then
+        printf 'Choose tools with --profile worker, supervisor, or both when stdin is not a terminal.\n' >&2
+        exit 2
+    fi
+    printf 'Which tools should setup configure?\n'
+    printf '  1) Worker     — Codex, GitHub CLI login, Git authentication\n'
+    printf '  2) Supervisor — Tailscale, Orca\n'
+    printf '  3) Both       — all tools (default)\n'
+    while true; do
+        read -r -p 'Select [1/2/3]: ' selection || exit 1
+        case "$selection" in
+            1|worker) SETUP_PROFILE=worker; break ;;
+            2|supervisor) SETUP_PROFILE=supervisor; break ;;
+            ''|3|both) SETUP_PROFILE=both; break ;;
+            *) printf 'Choose 1, 2, or 3.\n' ;;
+        esac
+    done
+fi
+SETUP_WORKER=0
+SETUP_SUPERVISOR=0
+[[ $SETUP_PROFILE == supervisor ]] || SETUP_WORKER=1
+[[ $SETUP_PROFILE == worker ]] || SETUP_SUPERVISOR=1
 
 # Keep the real terminal available for interactive authorization. Only setup
 # diagnostics go through tee; never enable shell tracing or dump the environment.
@@ -717,6 +777,7 @@ trap finish EXIT
 trap 'log "Interrupted"; exit 130' INT
 trap 'log "Terminated"; exit 143' TERM
 log "Setup log: $SETUP_LOG"
+log "Selected tools: $SETUP_PROFILE"
 log "Kernel and architecture: $(uname -srmo)"
 log "Bash: $BASH_VERSION"
 if command -v sha256sum >/dev/null; then
@@ -744,7 +805,7 @@ chmod 700 "$ROOT/state" "$GH_CONFIG_DIR" "$CODEX_HOME"
 stage credential-storage
 # Prevent environment tokens from hiding a missing persistent login.
 unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
-configure_codex
+if (( SETUP_WORKER )); then configure_codex; fi
 stage checkpoint-restore
 # Remember the starting state before save creates a checkpoint on the first run.
 SETUP_FROM_CHECKPOINT=0
@@ -752,10 +813,12 @@ SETUP_FROM_CHECKPOINT=0
 checkpoint restore
 checkpoint save
 CHECKPOINT_READY=1
+if (( SETUP_WORKER )); then
 stage credential-storage
 log "Codex login, settings, sessions, history and database: $CODEX_HOME"
 log 'Codex uses Approve for me: workspace-write, on-request approvals, automatic review'
 log 'Local interactive Codex uses --no-daemon and reloads /etc/environment on each launch'
+fi
 stage bash-startup
 python3 - "$ROOT" <<'PY'
 from pathlib import Path
@@ -801,18 +864,21 @@ stage browser-ca-trust
 trust_browser_ca
 stage network
 log 'Checking /etc/environment networking'
-for url in https://github.com https://auth.openai.com https://chatgpt.com; do
+network_urls=(https://github.com)
+if (( SETUP_WORKER )); then network_urls+=(https://auth.openai.com https://chatgpt.com); fi
+for url in "${network_urls[@]}"; do
     http_status=$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' --connect-timeout 10 --max-time 30 "$url") ||
         fail "Cannot reach $url using /etc/environment. Check the proxy service, address and CA certificate."
     log "Connection completed: $url (HTTP $http_status; transport check only)"
 done
+if (( SETUP_WORKER )); then
 stage github-login
 log "Credential directory: $GH_CONFIG_DIR"
 if ! gh auth status --hostname github.com >/dev/null 2>&1; then
     log 'Authorization required; device codes and login output appear only in the terminal'
     printf 'Copy the code printed below, then press Enter to open the browser in this environment.\n'
     printf 'If the browser cannot open, use https://github.com/login/device in another browser.\n'
-    gh auth login --hostname github.com --git-protocol https --web --insecure-storage >&3 2>&4 ||
+    login_github >&3 2>&4 ||
         fail 'GitHub login failed. Check proxy/networking and complete browser authorization.'
 fi
 gh auth status --hostname github.com >&3 2>&4
@@ -836,6 +902,13 @@ codex login status >&3 2>&4
 [[ -s "$CODEX_HOME/auth.json" ]] || fail 'Codex credentials were not persisted locally.'
 log 'Codex authentication succeeded and credentials are persisted'
 checkpoint save
+
+fi
+
+if (( ! SETUP_SUPERVISOR )); then
+    log 'Worker setup complete. Start Codex with ./setup.sh codex.'
+    exit 0
+fi
 
 TMP=$(mktemp -d "$ROOT/.download.XXXXXX")
 stage tailscale-binaries
@@ -876,6 +949,11 @@ stage tailscale-daemon
 tailscale_state="$ROOT/bin/tailscale-sandbox-state"
 if [[ -L $tailscale_state || ( -e $tailscale_state && ! -d $tailscale_state ) ]]; then
     fail "Tailscale state must be a local directory: $tailscale_state"
+fi
+if ! tailscale_status; then
+    migration_status=0
+    python3 "$ROOT/tailscale-reuse.py" "$ROOT" || migration_status=$?
+    (( migration_status != 2 )) || fail 'Tailscale state migration failed; original state is preserved. Check the migration error before restarting.'
 fi
 if ! tailscale_status; then
     check_tailscale_proxy
