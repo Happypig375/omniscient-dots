@@ -12,7 +12,7 @@ Send "Use https://github.com/Happypig375/omniscient-dots" to your Dot, then your
 - **Worker** (Codex, GitHub CLI login, and Git authentication) 
 - **Supervisor** (Tailscale and Orca)
 - **Both** (the default)
-4. After user choice, execute `source ./setup.sh --profile worker`, or `./setup.sh --profile supervisor`, or `./setup.sh --profile both` respectively; watch authentication.
+4. After user choice, on a new terminal on your cloud computer (not your bash tool from now on), execute `source ./setup.sh --profile worker`, or `./setup.sh --profile supervisor`, or `./setup.sh --profile both` respectively; watch authentication.
 5. After the script exits, with user approval of saving `/workspace/shared/omniscient-dots-master/state/.setup-checkpoint` to the user's ChatGPT Library and restoring that file from ChatGPT Library back to cloud computer automatically, execute the save.
 6. With setup completed, suggest what can be done:
 - If supervisor was chosen as set up, suggest that you can observe Orca's agents (list them) for any "model at capacity" errors that you can send "continue" prompts for
