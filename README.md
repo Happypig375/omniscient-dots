@@ -4,6 +4,8 @@
 
 Send "Use https://github.com/Happypig375/omniscient-dots" to your Dot, then "All setups, backups and restores are approved." when it asks for approval. After initial authentication following the initialization script on the dot's cloud computer, it gains Codex (not expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
 
+Remember that the cloud computer restarts and wipes its disk often. Do not run long-running tasks on the cloud computer without checkpointing on a remote server.
+
 ### For dots
 
 1. Use your bash tool to curl https://github.com/Happypig375/omniscient-dots/archive/refs/heads/master.zip to `/workspace/shared`
