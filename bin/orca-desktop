@@ -2,6 +2,8 @@
 set -e
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$ROOT/setup.sh" --env-only
+ORCA_USER_DATA_PATH=$(python3 "$ROOT/orca-profile.py" "$ORCA_USER_DATA_PATH")
+export ORCA_USER_DATA_PATH
 python3 "$ROOT/orca-locks.py" "$ORCA_USER_DATA_PATH"
 if [[ -d "$ROOT/state/remote-orca" ]]; then
     python3 "$ROOT/remote-orca.py" resume

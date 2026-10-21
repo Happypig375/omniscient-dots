@@ -141,7 +141,18 @@ separately:
 8. **Orca launch and window fit.** Dismiss onboarding, resume bridges, launch
    Orca, and fit and verify its visible window above desktop panels.
 
-   `./setup.sh remote resume` restarts saved outgoing forwarding bridges.
+   `./setup.sh remote resume` restarts saved outgoing forwarding bridges. A running
+   bridge is reused only after verifying its process identity, saved endpoint, and
+   owned loopback listener, including after checkout relocation. Unverified or
+   older listeners are left untouched; an occupied port fails safely.
+   For a legacy bridge without verification metadata, preserve its route file and
+   Orca profile. Inspect the saved loopback port with `ss -ltnp`, independently
+   verify the listening process belongs to this checkout's old forwarding bridge,
+   and stop only that verified process with SIGTERM. If ownership cannot be
+   established, restart the environment to clear old processes. Then run
+   `./setup.sh remote resume`. It keeps the saved port and grant; no new access
+   link or re-pairing is needed. Never stop an unknown listener or delete the route
+   to work around an occupied port.
    `./setup.sh desktop fit [--window <window-id>] [--timeout <seconds>]` refits an
    open window, waiting up to 20 seconds for it to appear by default.
 
@@ -249,6 +260,12 @@ Codex-specific CA path is cleared before loading these settings.
 Launch Orca through `bin/orca-desktop` to load these settings on later starts.
 Its child processes inherit them. Fully quit and reopen an existing Orca process
 after changing the environment scripts.
+
+For long checkout paths, the launchers use a short symlink under a private,
+owner-only `/tmp/od-<uid>/` directory to keep Orca Unix socket paths within Linux
+limits. The profile and credentials stay in the checkout; no data is moved or
+replaced. The alias is recreated as needed. Unsafe existing alias paths cause
+launch to stop.
 
 The desktop launcher defaults to dark mode using Electron's `--force-dark-mode`
 flag. This applies when Orca's theme is set to System; an explicit Light or Dark

@@ -1004,6 +1004,8 @@ printf 'To reload this terminal without repeating setup, source ./setup.sh --env
 printf 'Use ./setup.sh shell for a configured child terminal.\n'
 printf 'Use ./setup.sh codex to start Codex, or ./setup.sh codex resume to reopen a saved session.\n'
 # Finish every interactive setup step before the desktop can take focus.
+ORCA_USER_DATA_PATH=$(python3 "$ROOT/orca-profile.py" "$ORCA_USER_DATA_PATH")
+export ORCA_USER_DATA_PATH
 stage orca-shutdown
 prepare_orca_launch >&3 2>&4 || fail 'Could not close Orca before relaunching it.'
 python3 "$ROOT/orca-locks.py" "$ORCA_USER_DATA_PATH"

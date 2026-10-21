@@ -37,7 +37,7 @@ class CheckpointTests(unittest.TestCase):
         for name in ('setup.sh', 'persistence.py'):
             shutil.copyfile(REPO / name, self.root / name)
         return subprocess.run(['bash', str(self.root / 'setup.sh'), *arguments],
-                              cwd=self.root, text=True, capture_output=True, timeout=15)
+                              cwd=self.root, text=True, capture_output=True, stdin=subprocess.DEVNULL, start_new_session=True, timeout=15)
 
     def setup_until_credentials(self, after_credentials, *arguments, remote_script=b'# fixture\n'):
         # Execute the real setup startup, restore step and EXIT trap. Stop before
@@ -51,7 +51,7 @@ class CheckpointTests(unittest.TestCase):
             path = self.write('bin/' + name, b'#!/bin/sh\nexit 0\n')
             path.chmod(0o700)
         return subprocess.run(['bash', str(self.root / 'setup.sh'), '--profile', 'both', *arguments],
-                              cwd=self.root, text=True, capture_output=True, timeout=15)
+                              cwd=self.root, text=True, capture_output=True, stdin=subprocess.DEVNULL, start_new_session=True, timeout=15)
 
     def setup_through_remote_connections(self):
         source = (REPO / 'setup.sh').read_text()
@@ -97,6 +97,27 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual((self.root / name).read_bytes(), data)
             self.assertEqual(stat.S_IMODE((self.root / name).stat().st_mode), 0o600)
 
+    def test_checkpoint_relocation_roundtrip_preserves_grant_and_port(self):
+        grant = b'{"environments":[{"deviceToken":"fixture-grant"}]}'
+        self.write(ENVIRONMENTS, grant)
+        route = {'remote_host': '100.64.0.2', 'remote_port': 6768,
+                 'local_port': 23456, 'pid': 9876,
+                 'bridge_identity': {'command': str(self.root / 'remote-orca.py')},
+                 'bridge_endpoint': ['100.64.0.2', 6768, 23456]}
+        self.write(ROUTE, json.dumps(route).encode())
+        saved, _ = checkpoint.save_checkpoint(self.root)
+        relocated = self.root / 'different checkout'
+        relocated.mkdir()
+        portable = relocated / checkpoint.DEFAULT_CHECKPOINT
+        portable.parent.mkdir()
+        shutil.copyfile(saved, portable)
+        checkpoint.restore_checkpoint(relocated)
+        expected = {key: route[key] for key in ('remote_host', 'remote_port', 'local_port')}
+        self.assertEqual(json.loads((relocated / ROUTE).read_bytes()), expected)
+        self.assertEqual((relocated / ENVIRONMENTS).read_bytes(), grant)
+        checkpoint.save_checkpoint(relocated)
+        self.assertEqual(checkpoint.read_checkpoint(portable), checkpoint.read_checkpoint(saved))
+
     def test_restore_keeps_newer_tokens_then_save_updates_checkpoint(self):
         path = self.write(CODEX, b'{"refresh_token":"older"}')
         saved_checkpoint, _ = checkpoint.save_checkpoint(self.root)
@@ -121,7 +142,7 @@ class CheckpointTests(unittest.TestCase):
         self.write(CODEX, b'PRIVATE_CURRENT_LOGIN')
         saved_checkpoint, _ = checkpoint.save_checkpoint(self.root)
         result = subprocess.run(['file', '--brief', str(saved_checkpoint)],
-                                text=True, capture_output=True, check=True, timeout=5)
+                                text=True, capture_output=True, stdin=subprocess.DEVNULL, start_new_session=True, check=True, timeout=5)
         self.assertEqual(result.stdout.strip(), 'data')
 
     def test_invalid_entries_restore_nothing_and_do_not_leak_contents(self):

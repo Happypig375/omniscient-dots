@@ -20,7 +20,7 @@ class HelpTests(unittest.TestCase):
 
     def setup_command(self, *arguments):
         return subprocess.run(['bash', str(self.root / 'setup.sh'), *arguments],
-                              cwd=self.directory, text=True, capture_output=True, timeout=10)
+                              cwd=self.directory, text=True, capture_output=True, stdin=subprocess.DEVNULL, start_new_session=True, timeout=10)
 
     def assert_read_only_help(self, arguments):
         before = {path.relative_to(self.root): path.read_bytes()

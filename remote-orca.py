@@ -87,12 +87,41 @@ def share():
     print('Remote Orca Servers -> Add Server on the other computer. Keep the access link private.')
 
 
+def process_identity(pid):
+    process = Path(f'/proc/{int(pid)}')
+    if process.stat().st_uid != os.getuid():
+        raise ValueError('Bridge belongs to another user')
+    return {'boot': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            'start': (process / 'stat').read_text().rsplit(')', 1)[1].split()[19],
+            'command': os.fsdecode((process / 'cmdline').read_bytes())}
+
+
 def bridge_running(route_path, route):
     try:
-        arguments = Path(f'/proc/{int(route.get("pid", 0))}/cmdline').read_bytes().split(b'\0')
-        return (os.fsencode(str(Path(__file__).resolve())) in arguments and
-                os.fsencode(str(route_path)) in arguments and b'_bridge' in arguments)
-    except (OSError, ValueError):
+        pid = int(route.get('pid', 0))
+        if pid <= 0:
+            return False
+        identity = process_identity(pid)
+        arguments = identity['command'].split('\0')
+        if '_bridge' not in arguments:
+            return False
+        if identity != route.get('bridge_identity') or route.get('bridge_endpoint') != [
+                route['remote_host'], route['remote_port'], route['local_port']]:
+            return False
+        # The saved PID must actually own the exact loopback listening socket.
+        inodes = set()
+        for fd in Path(f'/proc/{pid}/fd').iterdir():
+            try:
+                inodes.add(os.readlink(fd))
+            except FileNotFoundError:
+                pass
+        address = f'0100007F:{int(route["local_port"]):04X}'
+        for line in Path(f'/proc/{pid}/net/tcp').read_text().splitlines()[1:]:
+            fields = line.split()
+            if fields[1] == address and fields[3] == '0A' and f'socket:[{fields[9]}]' in inodes:
+                return True
+        return False
+    except (OSError, ValueError, KeyError, IndexError):
         return False
 
 
@@ -380,6 +409,8 @@ def bridge(route_path):
         listener.bind(('127.0.0.1', route.get('local_port', 0)))
         listener.listen(32)
         route.update(local_port=listener.getsockname()[1], pid=os.getpid())
+        route['bridge_identity'] = process_identity(os.getpid())
+        route['bridge_endpoint'] = [route['remote_host'], route['remote_port'], route['local_port']]
         save(route_path, route)
         print(f'Listening on 127.0.0.1:{route["local_port"]}', flush=True)
         while True:
