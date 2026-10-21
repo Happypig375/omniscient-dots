@@ -2,7 +2,7 @@
 
 ### For humans
 
-Send "Use https://github.com/Happypig375/omniscient-dots" to your Dot, then your authentication can let it gain Codex (not expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
+Send "Use https://github.com/Happypig375/omniscient-dots" to your Dot, then "All setups, backups and restores are approved." when it asks for approval. After initial authentication following the initialization script on the dot's cloud computer, it gains Codex (not expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
 
 ### For dots
 
