@@ -41,6 +41,12 @@ _orca_load_environment() {
         "$ORCA_DOTS_DIR/bin"|"$ORCA_DOTS_DIR/bin":*) ;;
         *) export PATH="$ORCA_DOTS_DIR/bin${PATH:+:$PATH}" ;;
     esac
+    if [[ -d "$ORCA_DOTS_DIR/state/node/node-v24.22.1-linux-x64/bin" ]]; then
+        # Put the selected runtime ahead of old Node binaries, even if its
+        # directory was already present later on PATH.
+        export PATH="$ORCA_DOTS_DIR/state/node/node-v24.22.1-linux-x64/bin:$PATH"
+    fi
+    export ORCA_CLI_COMMAND="$ORCA_DOTS_DIR/bin/orca"
     hash -r
     if [[ ${ORCA_SYSTEM_SSH_PATH:-} == "$ORCA_DOTS_DIR/bin/ssh" ]]; then
         unset ORCA_SYSTEM_SSH_PATH
@@ -70,9 +76,13 @@ if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     # The environment above stays in the caller. Run the same installer in a
     # child Bash so its exits, execs, strict options and logging traps stay there.
     if bash "$ORCA_DOTS_DIR/setup.sh" "$@"; then
-        return 0
-    else
+        source "$ORCA_DOTS_DIR/setup.sh" --env-only
         return $?
+    else
+        # A later setup failure may follow a successful Node installation.
+        local_status=$?
+        source "$ORCA_DOTS_DIR/setup.sh" --env-only
+        return "$local_status"
     fi
 fi
 
@@ -569,6 +579,8 @@ Default setup (no command):
     5. Install or reuse Tailscale, connect the tailnet, and refresh the checkpoint.
        Then install or reuse Orca.
 
+       Verify Node/npm/npx, bundled CLI, and Codex/universal Orca skills.
+
     6. Close the desktop and clear stale locks when no Orca process is running.
 
     7. Reuse checkpoint connections; import servers only when starting without a checkpoint.
@@ -996,6 +1008,9 @@ fi
 if command -v sha256sum >/dev/null; then
     sha256sum "$ROOT/bin/orca.AppImage"
 fi
+stage orca-cli-and-skills
+python3 "$ROOT/orca-tools.py"
+source "$ROOT/setup.sh" --env-only
 # AppImage portable mode keeps Orca's own profile beside the downloaded app.
 mkdir -p "$ROOT/bin/orca.AppImage.config"
 printf '\nLogins and settings persist in %s.\n' "$ROOT"
