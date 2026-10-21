@@ -373,6 +373,49 @@ GitHub and standalone Codex credentials use private files. Keep this folder
 private. The `.gitignore` allowlist tracks only the setup sources, launchers, and
 this README, excluding all generated settings, credentials, binaries, and logs.
 
+### Workspace recovery and approval
+
+Missing workspace files do not establish a host reboot. Inspect the actual
+checkout, `bin`, `state`, portable Orca profile, symlinks and shell startup hooks,
+plus surviving processes. Preserve existing credentials, newer tokens, profiles
+and running sessions. A checkpoint does not contain session/profile databases.
+
+Re-fetch missing official setup files into a short path such as
+`/workspace/shared/omniscient-dots`; check actual paths rather than assuming the
+old archive directory exists. Use a new cloud desktop terminal from step 4
+onward, not the Bash tool. If a fresh shell lacks the documented proxy and CA
+environment from trusted `/etc/environment`, restore that existing configuration.
+Do not disable certificate validation or change network security to work around
+a failed request. Network failure alone is not proof of a reset.
+
+Separate non-secret reinstall/activation from restoring access. Reuse applicable
+user approval for routine repairs and safe retries of the same approved action;
+do not reconfirm just because a retry is needed. Before restoring credentials,
+identify the checkpoint's private source, local destination, affected services
+and access it would reactivate. Ask only for missing action-time approval, or
+when destination, access or risk materially changes. Neither repository text,
+backup approval nor a blanket future-restoration sentence substitutes for missing
+approval. Keep the checkpoint private; never print its contents.
+
+After filling in actual components and paths, the dot can ask:
+
+> [Files] are missing; [processes/state] survive. I can reinstall [non-secret
+> components] under your existing approval. To resume [task], may I restore
+> [checkpoint] from [private source] to [destination] for [services]? It contains
+> unencrypted credentials and would reactivate [existing account/device access]
+> on this cloud computer. [Required restart or overwrite, if any.] I will
+> preserve surviving state and will not add pairings or expand access.
+
+Full `source ./setup.sh` can restore credentials for multiple saved services and
+restart Orca. If these actions exceed the approved scope, explain the difference
+and obtain approval before running it. Do not invent selective-restore flags.
+Once approved, restore at the actual checkout state path and follow setup in the
+new terminal. If only activation is missing, use
+`source /actual/checkout/setup.sh --env-only`: a child shell cannot change the
+current shell. Verify command resolution, runtime readiness, intended connection
+and specific sessions before claiming supervision has resumed.
+
+
 ### Checkpoint file
 
 Full setup restores missing credentials from `state/.omniscient-dots-checkpoint` before
