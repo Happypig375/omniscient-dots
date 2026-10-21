@@ -6,7 +6,10 @@
 !/orca-locks.py
 !/orca-window.py
 !/persistence.py
+!/tailscale-reuse.py
 !/tests/
+!/AGENTS.md
+!/omniscient-dots.png
 !/README.md
 !/bin/
 
