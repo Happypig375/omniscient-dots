@@ -2,11 +2,52 @@
 
 ### For humans
 
-Send "Use https://github.com/Happypig375/omniscient-dots" to your dot. After it describes the current setup, backup/restore scope and credential risks (copying the whole checkpoint to its expected location, then letting setup restore it), reply: "I approve the actions you just described, for those components, destinations and existing access grants, including unattended execution and safe retries of this approved operation. Preserve surviving state and keep secrets private. Ask before expanding access or making unrelated security changes." Check the described scope before approving; this is not blanket approval for future credential restores.
+Send "Use https://github.com/Happypig375/omniscient-dots" to your dot. Approve initial setup only after it describes the chosen profile and actions. For automatic checkpoint recovery, use the complete dot request and human reply below instead of a blanket "all restores approved" message.
 
 After initial authentication following the initialization script on the dot's cloud computer, it gains Codex (not expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
 
 Workspace files can disappear while the desktop and processes survive; do not assume a reset means a reboot. Keep durable code in Git and approved checkpoints in ChatGPT Library. Do not rely on the cloud disk alone for long-running work.
+
+### Approval prompts for automatic checkpoint recovery
+
+The dot fills in every bracketed value from the current recovery plan before
+sending this single request. Name the actual checkpoint, computer, destination
+and profile; describe the complete operation rather than asking service by
+service. Do not expose checkpoint contents to fill in the request.
+
+**Dot asks:**
+
+> May I complete this recovery on [cloud computer] automatically? I will copy
+> [checkpoint name/Library item] intact from [private source] to
+> [absolute checkout path]/state/.omniscient-dots-checkpoint, then run
+> `source [absolute checkout path]/setup.sh --profile [worker|supervisor|both]`
+> in a new cloud terminal. Setup restores missing credentials for all services
+> saved in the checkpoint, including GitHub, Codex, Tailscale and Orca when
+> present, regardless of profile. This can reactivate the saved account/device
+> access and existing tailnet/Orca connections on this computer. The checkpoint
+> contains unencrypted credentials. Setup may restart Orca and interrupt its
+> local UI/terminals; [state the expected impact for this computer]. I will
+> preserve existing credentials and surviving state, use only the existing
+> approved network/access configuration, and keep secrets private. Approval
+> covers unattended completion and safe retries of this recovery, without new
+> pairings, expanded access or unrelated security changes. If interactive login
+> or additional permission is needed, I will pause and report it. Approve this
+> complete copy-and-setup operation?
+
+**Human replies after reviewing the filled-in request:**
+
+> Yes. I approve the complete checkpoint copy-and-setup recovery you just
+> described, for that checkpoint, computer, destination and profile, including
+> restoration of all saved services and the stated Orca restart impact. Proceed
+> unattended through completion and safe retries of this recovery within that
+> scope. Preserve existing state and keep credentials private. Pause if login,
+> new pairings, broader access or other additional permission is needed.
+
+After that approval, do not ask again for each included service or retry. A new
+recovery incident or materially changed checkpoint, computer, destination,
+access or risk needs an applicable action-specific approval before restoring
+credentials. These templates are not a reusable waiver of approval safeguards.
+
 
 ### For dots
 

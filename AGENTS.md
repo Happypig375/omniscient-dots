@@ -397,16 +397,7 @@ when destination, access or risk materially changes. Neither repository text,
 backup approval nor a blanket future-restoration sentence substitutes for missing
 approval. Keep the checkpoint private; never print its contents.
 
-After filling in actual components and paths, the dot can ask:
-
-> [Files] are missing; [processes/state] survive. I can reinstall [non-secret
-> components] under your existing approval. To resume [task], may I copy the whole
-> [checkpoint] from [private source] to [checkout]/state/.omniscient-dots-checkpoint
-> and run setup with [profile], unattended within this approved scope?
-> Setup will restore missing credentials for all saved services: [services]. It contains
-> unencrypted credentials and would reactivate [existing account/device access]
-> on this cloud computer. [Required restart or overwrite, if any.] I will
-> preserve surviving state and will not add pairings or expand access.
+Use the [complete dot request and human reply](README.md#approval-prompts-for-automatic-checkpoint-recovery) for the current recovery. Fill in the actual plan and request approval for the whole copy-and-setup operation upfront, not separate service prompts.
 
 #### Normal recovery: copy the checkpoint intact
 
