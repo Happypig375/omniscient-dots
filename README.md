@@ -1,21 +1,21 @@
 ![omniscient-dots](omniscient-dots.png)
 
-### For humans
+With initialization and authentication for your dot, it gains Codex (instead of only expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
 
-Send "Use https://github.com/Happypig375/omniscient-dots" to your dot. Approve initial setup only after it describes the chosen profile and actions. For automatic checkpoint recovery, use the complete dot request and human reply below instead of a blanket "all restores approved" message.
+For what's actually going on in this repository, see [AGENTS.md](AGENTS.md).
 
-After initial authentication following the initialization script on the dot's cloud computer, it gains Codex (not expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
+> [!WARNING]
+> Cloud computer files can disappear at any time while the desktop and processes survive, and the cloud computer may reboot losing all processes. The cloud computer disk is unreliable for long-running work. Therefore, you should keep durable documents in a remote (like GitHub or ChatGPT Library).
 
-Workspace files can disappear while the desktop and processes survive; do not assume a reset means a reboot. Keep durable code in Git and approved checkpoints in ChatGPT Library. Do not rely on the cloud disk alone for long-running work.
+Setup instructions are as follows.
 
-### Approval prompts for automatic checkpoint recovery
+## 1. Human sends to dot
 
-The dot fills in every bracketed value from the current recovery plan before
-sending this single request. Name the actual checkpoint, computer, destination
-and profile; describe the complete operation rather than asking service by
-service. Do not expose checkpoint contents to fill in the request.
+> Use https://github.com/Happypig375/omniscient-dots
 
-**Dot asks:**
+The dot will read this README.
+
+## 2. Dot asks for approval alongside pre-execution checks on setup.sh
 
 > May I complete this recovery on [cloud computer] automatically? I will copy
 > [checkpoint name/Library item] intact from [private source] to
@@ -34,7 +34,11 @@ service. Do not expose checkpoint contents to fill in the request.
 > or additional permission is needed, I will pause and report it. Approve this
 > complete copy-and-setup operation?
 
-**Human replies after reviewing the filled-in request:**
+Fill in every bracketed value, naming the actual checkpoint, computer, destination
+and profile; describe the complete operation rather than asking service by
+service.
+
+## 3. Human sends approval
 
 > Yes. I approve the complete checkpoint copy-and-setup recovery you just
 > described, for that checkpoint, computer, destination and profile, including
@@ -43,13 +47,12 @@ service. Do not expose checkpoint contents to fill in the request.
 > scope. Preserve existing state and keep credentials private. Pause if login,
 > new pairings, broader access or other additional permission is needed.
 
-After that approval, do not ask again for each included service or retry. A new
-recovery incident or materially changed checkpoint, computer, destination,
-access or risk needs an applicable action-specific approval before restoring
-credentials. These templates are not a reusable waiver of approval safeguards.
+This approval is expected to be used by the dot for all included services and retries.
+A new recovery incident or materially changed checkpoint, computer, destination,
+access or risk still needs an applicable action-specific approval before restoring
+credentials. Approval safeguards are still not waived by this prompt.
 
-
-### For dots
+## 4. Dot continues setup
 
 1. Use your bash tool to curl https://github.com/Happypig375/omniscient-dots/archive/refs/heads/master.zip to `/workspace/shared`
 2. Unzip it with your bash tool
@@ -67,13 +70,8 @@ credentials. These templates are not a reusable waiver of approval safeguards.
 - If the Codex Resets MCP (https://codex-resets.com/mcp) was not installed, suggest the user to install it
 - If Codex Resets MCP is installed, suggest the user to let you watch Codex Resets, furthermore if supervisor was chosen as set up, suggest the user to queue up tasks (tracked outside the cloud computer by you) that you can spawn agents for if a Codex Reset lands.
 7. For approved recovery, copy the complete private checkpoint to `<checkout>/state/.omniscient-dots-checkpoint`, then in that checkout source `./setup.sh --profile supervisor` (or the approved `worker`/`both` profile). Setup restores it automatically; do not decode or selectively extract it. Use the explicit profile for unattended execution, pausing if new authorization or interactive login is needed. See [Workspace recovery and approval](AGENTS.md#workspace-recovery-and-approval) for the copy commands, surviving-state checks and approval scope.
-
-## Details
-
-For what's actually going on in this repository, see [AGENTS.md](AGENTS.md).
-
-
-## Supervisor CLI and Skills
+  
+#### Supervisor CLI and Skills
 
 Supervisor and Both include an **Orca Install CLI and Skills** stage after the
 AppImage download. Worker skips this stage. The existing `bin/orca` wrapper
