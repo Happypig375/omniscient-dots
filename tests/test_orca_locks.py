@@ -97,8 +97,15 @@ class OrcaLockTests(unittest.TestCase):
         self.assertEqual(orca_locks.clear_stale_locks(self.profile, proc=self.proc), 1)
         self.assertFalse(lock.exists())
 
-    def test_unreadable_process_keeps_locks(self):
+    def test_unreadable_executable_of_unrelated_process_allows_cleanup(self):
         self.process('/usr/bin/node', '/some/script.js')
+        lock = self.write('orcad.lock')
+        with patch.object(orca_locks.os, 'readlink', side_effect=PermissionError):
+            self.assertEqual(orca_locks.clear_stale_locks(self.profile, proc=self.proc), 1)
+        self.assertFalse(lock.exists())
+
+    def test_unreadable_executable_of_orca_keeps_locks(self):
+        self.process('/usr/bin/node', '/other/cli/orcad.js')
         lock = self.write('orcad.lock')
         with patch.object(orca_locks.os, 'readlink', side_effect=PermissionError):
             self.assertEqual(orca_locks.clear_stale_locks(self.profile, proc=self.proc), 0)

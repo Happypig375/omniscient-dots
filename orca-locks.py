@@ -20,8 +20,13 @@ def orca_running(proc=Path('/proc')):
             arguments = (process / 'cmdline').read_bytes().split(b'\0')
             if not any(arguments):
                 continue  # Exited processes do not hold profile locks.
-            executable = Path(os.readlink(process / 'exe').removesuffix(' (deleted)')).name.lower()
             command = (process / 'comm').read_text().strip().lower()
+            try:
+                executable = Path(os.readlink(process / 'exe').removesuffix(' (deleted)')).name.lower()
+            except PermissionError:
+                # Other users' processes can expose cmdline and comm while Linux
+                # denies exe access. That alone is not evidence of a live Orca.
+                executable = command
             if executable in ORCA_PROCESSES:
                 return True
             # A shell launcher has not opened the profile yet. In particular,
