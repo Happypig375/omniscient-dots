@@ -16,7 +16,7 @@ The dot will read this README.
 ### 2. Dot asks for approval alongside pre-execution checks on setup.sh
 
 > May I complete this recovery on [cloud computer] automatically? I will copy
-> [checkpoint name/Library item] intact from [private source] to
+> [checkpoint name/Library item] while it exists intact from [private source] to
 > [absolute checkout path]/state/.omniscient-dots-checkpoint, then run
 > `source [absolute checkout path]/setup.sh --profile [worker|supervisor|both]`
 > in a new cloud terminal. Setup restores missing credentials for all services
