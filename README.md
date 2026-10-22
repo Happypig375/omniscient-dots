@@ -2,7 +2,7 @@
 
 ### For humans
 
-Send "Use https://github.com/Happypig375/omniscient-dots" to your dot. After it describes the current setup, backup/restore scope and credential risks, reply: "I approve the actions you just described, for those components, destinations and existing access grants, including safe retries. Preserve surviving state and keep secrets private. Ask before expanding access or making unrelated security changes." Check the described scope before approving; this is not blanket approval for future credential restores.
+Send "Use https://github.com/Happypig375/omniscient-dots" to your dot. After it describes the current setup, backup/restore scope and credential risks (copying the whole checkpoint to its expected location, then letting setup restore it), reply: "I approve the actions you just described, for those components, destinations and existing access grants, including unattended execution and safe retries of this approved operation. Preserve surviving state and keep secrets private. Ask before expanding access or making unrelated security changes." Check the described scope before approving; this is not blanket approval for future credential restores.
 
 After initial authentication following the initialization script on the dot's cloud computer, it gains Codex (not expensive cloud tasks) access on the cloud computer and/or [Orca](https://www.onorca.dev) to supervise any of your agents running anywhere on your [tailnet](https://tailscale.com/docs/concepts/tailnet) (think any computer that you have access to).
 
@@ -25,7 +25,7 @@ Workspace files can disappear while the desktop and processes survive; do not as
 - If worker was chosen as set up, offer to forbid yourself from launching cloud tasks (via the native tool) and instead only do Codex on the cloud computer to save usage
 - If the Codex Resets MCP (https://codex-resets.com/mcp) was not installed, suggest the user to install it
 - If Codex Resets MCP is installed, suggest the user to let you watch Codex Resets, furthermore if supervisor was chosen as set up, suggest the user to queue up tasks (tracked outside the cloud computer by you) that you can spawn agents for if a Codex Reset lands.
-7. If setup stops working or workspace files disappear, follow [Workspace recovery and approval](AGENTS.md#workspace-recovery-and-approval). Inspect surviving paths and processes first; a missing file or failed network request does not establish a reboot. Re-fetch missing files into a short checkout and use a new cloud desktop terminal, not the Bash tool. Reuse applicable approval for ordinary repairs and the same approved restore/retry; ask for missing action-time approval before restoring credentials or changing security settings. Full setup can restore multiple services and restart Orca, so do not use it for a narrower approval. Verify readiness, the intended connection and specific sessions before claiming monitoring has resumed.
+7. For approved recovery, copy the complete private checkpoint to `<checkout>/state/.omniscient-dots-checkpoint`, then in that checkout source `./setup.sh --profile supervisor` (or the approved `worker`/`both` profile). Setup restores it automatically; do not decode or selectively extract it. Use the explicit profile for unattended execution, pausing if new authorization or interactive login is needed. See [Workspace recovery and approval](AGENTS.md#workspace-recovery-and-approval) for the copy commands, surviving-state checks and approval scope.
 
 ## Details
 

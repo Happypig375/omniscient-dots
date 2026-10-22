@@ -400,20 +400,51 @@ approval. Keep the checkpoint private; never print its contents.
 After filling in actual components and paths, the dot can ask:
 
 > [Files] are missing; [processes/state] survive. I can reinstall [non-secret
-> components] under your existing approval. To resume [task], may I restore
-> [checkpoint] from [private source] to [destination] for [services]? It contains
+> components] under your existing approval. To resume [task], may I copy the whole
+> [checkpoint] from [private source] to [checkout]/state/.omniscient-dots-checkpoint
+> and run setup with [profile], unattended within this approved scope?
+> Setup will restore missing credentials for all saved services: [services]. It contains
 > unencrypted credentials and would reactivate [existing account/device access]
 > on this cloud computer. [Required restart or overwrite, if any.] I will
 > preserve surviving state and will not add pairings or expand access.
 
-Full `source ./setup.sh` can restore credentials for multiple saved services and
-restart Orca. If these actions exceed the approved scope, explain the difference
-and obtain approval before running it. Do not invent selective-restore flags.
-Once approved, restore at the actual checkout state path and follow setup in the
-new terminal. If only activation is missing, use
-`source /actual/checkout/setup.sh --env-only`: a child shell cannot change the
-current shell. Verify command resolution, runtime readiness, intended connection
-and specific sessions before claiming supervision has resumed.
+#### Normal recovery: copy the checkpoint intact
+
+After the current recovery scope is approved, copy the complete private checkpoint
+from ChatGPT Library to `<checkout>/state/.omniscient-dots-checkpoint`. Do not
+decode it, inspect tokens, split it by service or manually extract credential
+files. If a checkpoint already exists there, preserve it rather than blindly
+overwriting newer state. For a missing destination, from the actual checkout in
+a new cloud desktop terminal:
+
+```bash
+mkdir -p state
+chmod 700 state
+install -m 600 /private/path/to/downloaded-checkpoint state/.omniscient-dots-checkpoint
+source ./setup.sh --profile supervisor
+```
+
+Use the approved `worker`, `supervisor` or `both` profile instead of `supervisor`
+as appropriate. Copying only places the file; setup automatically validates and
+restores missing credentials from it before checking logins. It keeps existing
+native credential files. The restore covers all saved services, regardless of
+profile; setup may also restart Orca. Describe this whole operation and its
+affected services upfront when requesting any missing approval, not a proposed
+manual extraction. Repository instructions cannot grant credential access.
+
+For unattended recovery, use the explicit approved `--profile` to skip the
+profile question. Once this operation is approved, proceed without repeated
+confirmation, including safe retries within the same scope. There is no separate
+`--unattended` flag: valid saved logins can be reused, but setup may still require
+interactive authentication. If login, a new pairing, broader permissions or a
+materially changed scope is required, pause and report that blocker; do not
+invent answers, bypass safeguards or claim restoration succeeded. A prior
+blanket promise does not supply missing approval for a new credential restore.
+
+If only shell activation is missing, use
+`source /actual/checkout/setup.sh --env-only` instead of full setup. Verify command
+resolution, runtime readiness, the intended connection and specific sessions
+before claiming supervision has resumed.
 
 
 ### Checkpoint file
