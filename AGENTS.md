@@ -1,4 +1,4 @@
-Update this file like a README.
+Update this file as repository maintance instructions.
 
 # Orca for dots
 
