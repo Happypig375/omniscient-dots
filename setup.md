@@ -249,8 +249,11 @@ A successful `orca terminal list` response can contain an empty list while
 `hostScope.hostIds` includes only `local` and `omittedHostIds` names remote
 hosts. This is incomplete coverage, not evidence that no agents are running.
 Record the requested environment and returned host scope; consult the installed
-CLI guide/help for its supported host selector and repeat read-only inventory
-for the intended host. Do not guess flags or silently substitute local results.
+CLI guide/help for supported coverage controls, if any, and repeat read-only
+inventory for the intended host only when supported. The installed help may
+expose no host selector; report that limitation rather than inventing one.
+The label local is relative to the selected server, not necessarily this cloud
+computer. Do not guess flags or silently substitute local results.
 When a worktree selector is required, preserve its full returned ID rather than
 reconstructing it from a display name or path. If coverage cannot be established,
 report the missing host as an explicit blocker and do not send continuation input.
