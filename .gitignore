@@ -15,6 +15,10 @@
 !/omniscient-dots.png
 !/README.md
 !/setup.md
+!/PRIOR-ART-USAGE.md
+!/USAGE.md
+!/usage_ledger.py
+!/account-usage.py
 !/bin/
 
 # Keep the launchers, ignoring downloads and their adjacent persistent state.

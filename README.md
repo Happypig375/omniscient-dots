@@ -56,6 +56,10 @@ Follow [setup.md](setup.md).
 
 ## Repo maintenance details
 
+For observational Codex quota/session usage and synthetic replay, see
+[Usage tracking](USAGE.md). It reports unknown payer mappings and has no
+automatic account or task actions.
+
 Refer to [AGENTS.md](AGENTS.md). The mandatory
 [completion gate](setup.md#mandatory-completion-gate) follows installation and
 backup; exit zero alone does not complete the workflow.

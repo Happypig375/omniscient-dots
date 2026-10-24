@@ -196,12 +196,33 @@ a remote session. Inspect non-secret runtime metadata only within authorized sco
 | Cost estimate | Estimate with reported coverage; do not present as actual billed spend |
 | Missing identity, scope or source | Unknown provenance; do not infer local host, zero usage or available capacity |
 
-The [usage guide](https://www.onorca.dev/docs/agents/usage-tracking) describes
+For optional local Codex observation after setup, see [Usage tracking](USAGE.md).
+No additional package installation is needed (Python 3.11+ standard library).
+With action-specific authorization for the selected launcher's normal config/mode
+writes and one quota observation, run from this checkout:
+
+```bash
+python3 account-usage.py snapshot --launcher /actual/checkout/setup.sh --evidence-only
+```
+
+This launches a separate local stdio observer, performs a version/schema check,
+uses `account/read` with `refreshToken:false`, and attempts one quota query. It
+does not attach to or map existing Orca/CLI sessions. The separately authorized
+`selftest` command creates one new synthetic turn only after those checks pass;
+it can consume model usage. The current validation record is blocked at account
+read (`-32603`, internal error; exact cause `routing_discovery_failed`,
+underlying cause/auth state unknown), with zero quota/token measurements and no
+thread/turn requests. Do not treat the offline tests as successful live tracking,
+automatically start it during setup, or enable polling.
+The guide explains private numeric stdout, unknown attribution and retention.
+
+The [Orca usage guide](https://www.onorca.dev/docs/agents/usage-tracking) describes
 active-account usage, per-account windows and estimated costs. Check the UI with
 authorized computer use when CLI metadata cannot answer the question; redact
 identities and sensitive output in reports. Never inspect credential files to
 fill gaps. A selected account and a quota display alone do not prove session
-billing attribution. No supported account-quota CLI recipe is established here.
+billing attribution. No supported **Orca** account-quota CLI recipe is established
+here; the separate Codex adapter does not fill that Orca session-binding gap.
 
 Without verified mapping or supported structured quota data, use existing
 terminal output for capacity, rate-limit, or quota errors. Report the observed
