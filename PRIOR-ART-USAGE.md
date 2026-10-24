@@ -37,4 +37,7 @@ license review, not a dependency security audit. [USAGE.md](USAGE.md) documents
 the implemented subset, validation outcome and deferred scope. Claude/Orca
 adapters, request-bound payer attribution, user priority policies, financial
 reconciliation and rate estimation remain deferred; the synthetic tests do not
-establish those capabilities or successful live acquisition.
+establish those capabilities or live acquisition. The separate authorized
+token-only evidence in [USAGE.md](USAGE.md#validation-record-2026-10-25-asiasingapore)
+verifies token delivery only; account/quota acquisition remains blocked and payer
+binding unknown. The one-turn authorization is consumed.

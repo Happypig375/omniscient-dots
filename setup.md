@@ -209,10 +209,16 @@ This launches a separate local stdio observer, performs a version/schema check,
 uses `account/read` with `refreshToken:false`, and attempts one quota query. It
 does not attach to or map existing Orca/CLI sessions. The separately authorized
 `selftest` command creates one new synthetic turn only after those checks pass;
-it can consume model usage. The current validation record is blocked at account
-read (`-32603`, internal error; exact cause `routing_discovery_failed`,
-underlying cause/auth state unknown), with zero quota/token measurements and no
-thread/turn requests. Do not treat the offline tests as successful live tracking,
+it can consume model usage. The explicit `token-selftest` mode instead creates
+one new ephemeral turn without account/quota reads, using the same protocol,
+model and execution-policy guards. It requires separate turn authorization and
+is never an automatic fallback after account/authentication/permission failure.
+Account/quota observation remains blocked at account read (`-32603`, internal
+error; exact cause `routing_discovery_failed`, underlying cause/auth state
+unknown). A separately authorized independent token-only test completed one
+turn and received token usage; quota was not queried and payer remained unknown.
+That turn allowance is consumed; the new CLI mode has only offline validation.
+Do not treat the offline tests as successful live tracking,
 automatically start it during setup, or enable polling.
 The guide explains private numeric stdout, unknown attribution and retention.
 

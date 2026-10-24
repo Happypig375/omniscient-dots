@@ -207,11 +207,13 @@ class StdioClient:
         self.process.stdout.close()
 
 
-def observe(launcher, selftest=False, timeout=90, ttl=120):
+def observe(launcher, selftest=False, timeout=90, ttl=120, *, token_selftest=False):
+    require(not (selftest and token_selftest), "conflicting_modes")
     capability = protocol_check(launcher)
     ledger = Ledger(ttl)
     evidence = {"capability": capability, "new_session_only": True, "auth_refresh_requested": False,
-                "account_identity_present": None, "quota_observed": False,
+                "account_identity_present": None, "quota_observed": False, "quota_queried": False,
+                "coverage": {"account": "not_queried", "quota": "not_queried", "tokens": "not_requested"},
                 "new_thread_created": False, "new_turn_started": False,
                 "new_thread_state": "not_requested", "new_turn_state": "not_requested",
                 "bootstrap_account_notifications": 0,
@@ -240,6 +242,10 @@ def observe(launcher, selftest=False, timeout=90, ttl=120):
         def event(message):
             nonlocal notifications
             method = message.get("method")
+            # Token-only collection makes no account-scope assertion. Neither
+            # account notifications nor quota pushes supply a turn's payer.
+            if token_selftest and method in ("account/updated", "account/rateLimits/updated"):
+                return
             params = obj(message.get("params", {}))
             if method in ("thread/tokenUsage/updated", "turn/completed", "item/started", "item/completed"):
                 require(own_thread is not None, "unexpected_thread")
@@ -268,6 +274,7 @@ def observe(launcher, selftest=False, timeout=90, ttl=120):
                 notifications += 1
                 ledger.tokens(params, context(f"event_{notifications}"))
                 evidence["token_event_observed"] = True
+                evidence["coverage"]["tokens"] = "observed"
             elif method == "account/rateLimits/updated":
                 # No quota sample may cross the initial account-read boundary.
                 if not account_bound:
@@ -304,24 +311,28 @@ def observe(launcher, selftest=False, timeout=90, ttl=120):
         try:
             client.request("initialize", {"clientInfo": {"name": "od_usage_observer", "version": "1"}})
             client.send({"method": "initialized", "params": {}})
-            phase = "account_read"
-            account = client.request("account/read", {"refreshToken": False}).get("account")
-            mode = obj(account).get("type") if account is not None else None
-            evidence["auth_mode"] = mode if mode in ("chatgpt", "apiKey") else "unknown"
-            require(mode == "chatgpt", "chatgpt_quota_unavailable")
-            # Inspect identity presence only; do not extract email, IDs or plan.
-            evidence["account_identity_present"] = account is not None
-            account_bound = True
-            phase = "quota_query"
-            start = time.time()
-            quota = client.request("account/rateLimits/read", {})
-            ledger.quota(quota, context("query_1", start))
-            evidence["quota_observed"] = any(s["lane"] == "account_quota" and s["sample_id"] == "query_1"
-                                               for s in ledger.samples)
-            evidence["quota_account_id_present"] = bool(quota.get("accountId"))
-            del quota, account
+            if not token_selftest:
+                phase = "account_read"
+                account = client.request("account/read", {"refreshToken": False}).get("account")
+                mode = obj(account).get("type") if account is not None else None
+                evidence["auth_mode"] = mode if mode in ("chatgpt", "apiKey") else "unknown"
+                require(mode == "chatgpt", "chatgpt_quota_unavailable")
+                # Inspect identity presence only; do not extract email, IDs or plan.
+                evidence["account_identity_present"] = account is not None
+                evidence["coverage"]["account"] = "observed"
+                account_bound = True
+                phase = "quota_query"
+                start = time.time()
+                evidence["quota_queried"] = True
+                quota = client.request("account/rateLimits/read", {})
+                ledger.quota(quota, context("query_1", start))
+                evidence["quota_observed"] = any(s["lane"] == "account_quota" and s["sample_id"] == "query_1"
+                                                   for s in ledger.samples)
+                evidence["coverage"]["quota"] = "observed" if evidence["quota_observed"] else "unavailable"
+                evidence["quota_account_id_present"] = bool(quota.get("accountId"))
+                del quota, account
             phase = "snapshot_complete"
-            if selftest:
+            if selftest or token_selftest:
                 phase = "thread_start"
                 evidence["new_thread_state"] = "outcome_unknown"
                 thread = client.request("thread/start", {
@@ -357,13 +368,20 @@ def observe(launcher, selftest=False, timeout=90, ttl=120):
                     client.receive()
                 require(evidence["turn_status"] == "completed", "selftest_turn_failed")
                 require(evidence["token_event_observed"], "token_event_missing")
-            evidence["status"] = "observed" if evidence["quota_observed"] else "partial"
-            if not evidence["quota_observed"]:
+            observed = evidence["token_event_observed"] if token_selftest else evidence["quota_observed"]
+            evidence["status"] = "observed" if observed else "partial"
+            if not token_selftest and not evidence["quota_observed"]:
                 evidence["quota_gap"] = "No supported quota windows in query response"
         except UsageError as error:
             evidence["status"] = "blocked"
             evidence["blocker"] = str(error)
             evidence["failure_stage"] = phase
+            if phase == "account_read":
+                evidence["coverage"]["account"] = "failed"
+            elif phase == "quota_query":
+                evidence["coverage"]["quota"] = "failed"
+            elif phase in ("thread_start", "turn_start", "turn_events") and not evidence["token_event_observed"]:
+                evidence["coverage"]["tokens"] = "failed"
             if isinstance(error, RpcError):
                 evidence["rpc_code"] = error.rpc_code
                 evidence["rpc_category"] = error.rpc_category
@@ -388,8 +406,10 @@ def main():
     replay = sub.add_parser("replay", help="Read only synthetic usage envelopes from stdin")
     replay.add_argument("--now", type=float, required=True)
     replay.add_argument("--ttl", type=float, default=120)
-    for name in ("probe", "snapshot", "selftest"):
-        live = sub.add_parser(name, help="Explicit local launcher; selftest creates one ephemeral turn")
+    for name in ("probe", "snapshot", "selftest", "token-selftest"):
+        live = sub.add_parser(name, help=("One ephemeral token test without account/quota reads"
+                                        if name == "token-selftest" else
+                                        "Explicit local launcher; selftest creates one ephemeral turn"))
         live.add_argument("--launcher", type=Path, required=True)
         live.add_argument("--timeout", type=int, choices=range(10, 121), default=90, metavar="10..120")
         live.add_argument("--evidence-only", action="store_true", help="Exclude private metric values")
@@ -409,7 +429,8 @@ def main():
             if args.command == "probe":
                 result = protocol_check(args.launcher)
             else:
-                result = observe(args.launcher, args.command == "selftest", args.timeout)
+                result = observe(args.launcher, selftest=args.command == "selftest", timeout=args.timeout,
+                                 token_selftest=args.command == "token-selftest")
                 if args.evidence_only:
                     result = result["evidence"]
         print(json.dumps(result, sort_keys=True, allow_nan=False))

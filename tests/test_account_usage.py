@@ -54,6 +54,10 @@ class LedgerTests(unittest.TestCase):
         self.ledger.tokens(tokens(), self.ctx("event_1", fetched=False))
         row = self.ledger.report(1010)["samples"][-1]
         self.assertEqual(row["total"]["totalTokens"], 120)
+        self.assertEqual(row["total"]["inputTokens"], 100)
+        self.assertEqual(row["total"]["cachedInputTokens"], 40)
+        self.assertEqual(row["total"]["inputTokens"] + row["total"]["outputTokens"],
+                         row["total"]["totalTokens"])
         self.assertEqual(row["context_capacity_tokens"], 1000)
         self.assertEqual(row["session_payer_binding"], "unknown")
         self.assertIsNone(row["pool"])
@@ -304,11 +308,12 @@ class LiveBoundaryTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_", json.dumps(result))
 
     def runtime_result(self, *, fail=None, early=None, sandbox="readOnly", complete=True, failure=None,
-                       before=None):
+                       before=None, token_only=False, selftest=True, model=live.MODEL, effort="xhigh", reviewer="user"):
         class Client:
             def __init__(self, command, timeout, cwd=None):
                 self.methods = []
-                self.process = SimpleNamespace(poll=lambda: 0)
+                self.closed = False
+                self.process = SimpleNamespace(poll=lambda: 0 if self.closed else None)
 
             def send(self, message):
                 pass
@@ -328,8 +333,8 @@ class LiveBoundaryTests(unittest.TestCase):
                 if method == "account/rateLimits/read":
                     return quota()
                 if method == "thread/start":
-                    return {"thread": {"id": "PRIVATE_THREAD"}, "model": live.MODEL, "reasoningEffort": "xhigh",
-                            "sandbox": {"type": sandbox}, "approvalsReviewer": "user"}
+                    return {"thread": {"id": "PRIVATE_THREAD"}, "model": model, "reasoningEffort": effort,
+                            "sandbox": {"type": sandbox}, "approvalsReviewer": reviewer}
                 if method == "turn/start":
                     for message in early or []:
                         self.on_event(message)
@@ -347,16 +352,76 @@ class LiveBoundaryTests(unittest.TestCase):
                     "status": "completed" if complete else "failed"}}})
 
             def close(self):
-                pass
+                self.closed = True
 
         with patch.object(live, "protocol_check", return_value={"version": "0.164.0"}), patch.object(live, "StdioClient", Client):
-            return live.observe(Path("/explicit/setup.sh"), selftest=True)
+            return live.observe(Path("/explicit/setup.sh"), selftest=selftest and not token_only,
+                                token_selftest=token_only)
+
+    def test_token_selftest_skips_account_and_quota_and_keeps_payer_unknown(self):
+        updates = [
+            {"method": "account/updated", "params": {"accountId": "PRIVATE_ACCOUNT", "authMode": "chatgpt"}},
+            {"method": "account/rateLimits/updated", "params": quota(99)}]
+        result = self.runtime_result(token_only=True, before={
+            method: updates for method in ("initialize", "thread/start", "turn/start")}, early=[
+                {"method": "thread/tokenUsage/updated", "params": tokens()}])
+        evidence, report = result["evidence"], result["report"]
+        self.assertEqual(evidence["request_methods"], ["initialize", "thread/start", "turn/start"])
+        self.assertEqual(evidence["status"], "observed")
+        self.assertEqual(evidence["coverage"], {"account": "not_queried", "quota": "not_queried", "tokens": "observed"})
+        self.assertFalse(evidence["quota_queried"] or evidence["quota_observed"])
+        self.assertIsNone(evidence["account_identity_present"])
+        self.assertEqual(evidence["session_payer_binding"], "unknown")
+        self.assertTrue(evidence["child_terminated"])
+        self.assertEqual([s["lane"] for s in report["samples"]], ["session_tokens"])
+        self.assertEqual(report["samples"][0]["session_payer_binding"], "unknown")
+        self.assertIsNone(report["samples"][0]["pool"])
+        self.assertEqual(report["source_health"]["source_1"]["code"], "not_queried")
+        self.assertEqual(report["source_health"]["source_1"]["query_auth"], "unknown")
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_token_selftest_failure_never_becomes_quota_failure(self):
+        for failure in ("thread/start", "turn/start", "events"):
+            with self.subTest(failure=failure):
+                result = self.runtime_result(token_only=True, fail=failure)
+                evidence = result["evidence"]
+                self.assertEqual(evidence["status"], "blocked")
+                self.assertEqual(evidence["coverage"], {"account": "not_queried", "quota": "not_queried", "tokens": "failed"})
+                self.assertTrue(evidence["child_terminated"])
+                self.assertFalse(result["report"]["source_health"])
+        result = self.runtime_result(token_only=True, complete=False, early=[
+            {"method": "thread/tokenUsage/updated", "params": tokens()}])
+        self.assertEqual(result["evidence"]["blocker"], "selftest_turn_failed")
+        self.assertEqual(result["evidence"]["coverage"]["tokens"], "observed")
+        self.assertEqual(result["report"]["source_health"]["source_1"]["code"], "not_queried")
+
+    def test_account_or_quota_errors_never_fall_back_to_token_selftest(self):
+        for selftest in (False, True):
+            for method in ("account/read", "account/rateLimits/read"):
+                with self.subTest(selftest=selftest, method=method):
+                    result = self.runtime_result(selftest=selftest, fail=method, failure=live.RpcError({
+                        "code": 403, "message": "PRIVATE permission denied"}, method))
+                    evidence = result["evidence"]
+                    self.assertEqual(evidence["request_methods"], ["initialize", "account/read"] +
+                                     ([method] if method == "account/rateLimits/read" else []))
+                    self.assertEqual(evidence["status"], "blocked")
+                    self.assertEqual(evidence["coverage"]["tokens"], "not_requested")
+                    self.assertEqual(evidence["coverage"]["account" if method == "account/read" else "quota"], "failed")
+                    self.assertTrue(evidence["child_terminated"])
+
+    def test_snapshot_still_stops_after_quota_query(self):
+        result = self.runtime_result(selftest=False)
+        self.assertEqual(result["evidence"]["request_methods"], ["initialize", "account/read", "account/rateLimits/read"])
+        self.assertEqual(result["evidence"]["coverage"], {"account": "observed", "quota": "observed", "tokens": "not_requested"})
+        self.assertEqual(result["evidence"]["status"], "observed")
 
     def test_turn_failure_does_not_change_successful_quota_query_health(self):
         for failure in ("thread/start", "turn/start", "events"):
             with self.subTest(failure=failure):
                 result = self.runtime_result(fail=failure)
                 self.assertEqual(result["evidence"]["status"], "blocked")
+                self.assertEqual(result["evidence"]["coverage"]["quota"], "observed")
+                self.assertEqual(result["evidence"]["coverage"]["tokens"], "failed")
                 self.assertEqual(result["report"]["source_health"]["source_1"]["code"], "ok")
 
     def test_account_read_failure_does_not_fabricate_quota_query_attempt(self):
@@ -425,37 +490,59 @@ class LiveBoundaryTests(unittest.TestCase):
         self.assertEqual(result["report"]["source_health"]["source_1"]["code"], "revalidation_required")
 
     def test_wrong_effective_sandbox_stops_before_turn(self):
-        result = self.runtime_result(sandbox="workspaceWrite")
-        self.assertEqual(result["evidence"]["blocker"], "execution_policy_mismatch")
-        self.assertNotIn("turn/start", result["evidence"]["request_methods"])
+        for token_only in (False, True):
+            for settings, blocker in (({"sandbox": "workspaceWrite"}, "execution_policy_mismatch"),
+                                      ({"reviewer": "auto_review"}, "execution_policy_mismatch"),
+                                      ({"model": "other"}, "model_or_effort_mismatch"),
+                                      ({"effort": "low"}, "model_or_effort_mismatch")):
+                with self.subTest(token_only=token_only, settings=settings):
+                    result = self.runtime_result(token_only=token_only, **settings)
+                    self.assertEqual(result["evidence"]["blocker"], blocker)
+                    self.assertNotIn("turn/start", result["evidence"]["request_methods"])
+                    self.assertTrue(result["evidence"]["child_terminated"])
 
     def test_early_events_are_bound_only_after_turn_response(self):
-        result = self.runtime_result(early=[
-            {"method": "thread/tokenUsage/updated", "params": tokens()},
-            {"method": "turn/completed", "params": {
-                "threadId": "PRIVATE_THREAD", "turn": {"id": "PRIVATE_TURN", "status": "completed"}}}])
-        self.assertEqual(result["evidence"]["status"], "observed")
-        self.assertTrue(result["evidence"]["token_event_observed"])
-        self.assertNotIn("PRIVATE_", json.dumps(result))
+        for token_only in (False, True):
+            with self.subTest(token_only=token_only):
+                result = self.runtime_result(token_only=token_only, early=[
+                    {"method": "thread/tokenUsage/updated", "params": tokens()},
+                    {"method": "turn/completed", "params": {
+                        "threadId": "PRIVATE_THREAD", "turn": {"id": "PRIVATE_TURN", "status": "completed"}}}])
+                self.assertEqual(result["evidence"]["status"], "observed")
+                self.assertTrue(result["evidence"]["token_event_observed"])
+                self.assertTrue(result["evidence"]["child_terminated"])
+                self.assertNotIn("PRIVATE_", json.dumps(result))
 
     def test_early_other_turn_event_is_rejected_without_token_sample(self):
-        result = self.runtime_result(early=[{"method": "thread/tokenUsage/updated", "params": tokens(turn="OTHER_PRIVATE")}])
-        self.assertEqual(result["evidence"]["blocker"], "unexpected_turn")
-        self.assertFalse(any(s["lane"] == "session_tokens" for s in result["report"]["samples"]))
+        for token_only in (False, True):
+            with self.subTest(token_only=token_only):
+                result = self.runtime_result(token_only=token_only, early=[
+                    {"method": "thread/tokenUsage/updated", "params": tokens(turn="OTHER_PRIVATE")}])
+                self.assertEqual(result["evidence"]["blocker"], "unexpected_turn")
+                self.assertFalse(any(s["lane"] == "session_tokens" for s in result["report"]["samples"]))
+                self.assertTrue(result["evidence"]["child_terminated"])
 
     def test_early_tool_activity_stops_collection(self):
-        result = self.runtime_result(early=[{"method": "item/started", "params": {
-            "threadId": "PRIVATE_THREAD", "turnId": "PRIVATE_TURN", "item": {
-                "type": "commandExecution", "command": "PRIVATE_COMMAND"}}}])
-        self.assertEqual(result["evidence"]["blocker"], "unexpected_tool_activity")
-        self.assertTrue(result["evidence"]["tool_activity_observed"])
-        self.assertNotIn("PRIVATE_", json.dumps(result))
+        for token_only in (False, True):
+            with self.subTest(token_only=token_only):
+                result = self.runtime_result(token_only=token_only, early=[{"method": "item/started", "params": {
+                    "threadId": "PRIVATE_THREAD", "turnId": "PRIVATE_TURN", "item": {
+                        "type": "commandExecution", "command": "PRIVATE_COMMAND"}}}])
+                self.assertEqual(result["evidence"]["blocker"], "unexpected_tool_activity")
+                self.assertTrue(result["evidence"]["tool_activity_observed"])
+                self.assertTrue(result["evidence"]["child_terminated"])
+                self.assertNotIn("PRIVATE_", json.dumps(result))
 
     def test_missing_token_event_remains_unknown_with_good_query_health(self):
         result = self.runtime_result()
         self.assertEqual(result["evidence"]["blocker"], "token_event_missing")
         self.assertFalse(result["evidence"]["token_event_observed"])
         self.assertEqual(result["report"]["source_health"]["source_1"]["code"], "ok")
+        result = self.runtime_result(token_only=True)
+        self.assertEqual(result["evidence"]["blocker"], "token_event_missing")
+        self.assertEqual(result["evidence"]["coverage"], {"account": "not_queried", "quota": "not_queried", "tokens": "failed"})
+        self.assertTrue(result["evidence"]["child_terminated"])
+        self.assertFalse(result["report"]["source_health"])
 
     def test_failed_account_read_has_unknown_identity_and_no_session(self):
         result = self.runtime_result(fail="account/read")
@@ -540,10 +627,11 @@ class LiveBoundaryTests(unittest.TestCase):
                     self.assertNotIn("PRIVATE", repr(error.__dict__))
 
     def test_version_probe_stops_before_starting_server(self):
-        with patch.object(live, "checked_command", return_value="codex-cli 0.163.0"), patch.object(live, "StdioClient") as client:
-            with self.assertRaisesRegex(UsageError, "unsupported_producer"):
-                live.observe(Path("/explicit/setup.sh"))
-            client.assert_not_called()
+        for token_only in (False, True):
+            with self.subTest(token_only=token_only), patch.object(live, "checked_command", return_value="codex-cli 0.163.0"), patch.object(live, "StdioClient") as client:
+                with self.assertRaisesRegex(UsageError, "unsupported_producer"):
+                    live.observe(Path("/explicit/setup.sh"), token_selftest=token_only)
+                client.assert_not_called()
 
     def test_schema_gate_rejects_missing_fields(self):
         def command(args, **kwargs):
@@ -556,9 +644,21 @@ class LiveBoundaryTests(unittest.TestCase):
             for name in live.SCHEMAS:
                 (directory / (name + ".json")).write_text('{"properties":{}}')
             return ""
-        with patch.object(live, "checked_command", side_effect=command):
-            with self.assertRaisesRegex(UsageError, "installed_schema_incompatible"):
-                live.protocol_check(Path("/explicit/setup.sh"))
+        for token_only in (False, True):
+            with self.subTest(token_only=token_only), patch.object(live, "checked_command", side_effect=command), patch.object(live, "StdioClient") as client:
+                with self.assertRaisesRegex(UsageError, "installed_schema_incompatible"):
+                    live.observe(Path("/explicit/setup.sh"), token_selftest=token_only)
+                client.assert_not_called()
+
+    def test_token_selftest_cli_selects_explicit_mode_and_evidence_only(self):
+        result = self.runtime_result(token_only=True, early=[
+            {"method": "thread/tokenUsage/updated", "params": tokens()}])
+        with patch.object(sys, "argv", ["account-usage.py", "token-selftest", "--launcher",
+                                       "/explicit/setup.sh", "--evidence-only"]), \
+                patch.object(live, "observe", return_value=result) as observe, patch("builtins.print") as output:
+            self.assertEqual(live.main(), 0)
+        observe.assert_called_once_with(Path("/explicit/setup.sh"), selftest=False, timeout=90, token_selftest=True)
+        self.assertEqual(json.loads(output.call_args.args[0]), result["evidence"])
 
     def test_stdio_refuses_server_refresh_request_and_terminates_child(self):
         code = 'import json,time; print(json.dumps({"id":42,"method":"account/chatgptAuthTokens/refresh","params":{}}),flush=True); time.sleep(5)'
