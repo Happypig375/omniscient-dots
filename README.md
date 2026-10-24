@@ -38,17 +38,17 @@ service.
 
 ### 3. Human sends approval
 
-> Yes. I approve the complete checkpoint copy-and-setup recovery you just
-> described, for that checkpoint, computer, destination and profile, including
-> restoration of all saved services and the stated Orca restart impact. Proceed
-> unattended through completion and safe retries of this recovery within that
-> scope. Preserve existing state and keep credentials private. Pause if login,
-> new pairings, broader access or other additional permission is needed.
+A short **Yes**, **Sure**, or **Approved** suffices for the specific pending,
+fully described scope above. The assistant fills in the details; the human need
+not repeat boilerplate. Choosing Worker, Supervisor or Both is a separate profile
+choice, not approval to restore credentials. Resolve that choice before presenting
+the exact recovery scope.
 
-This approval is expected to be used by the dot for all included services and retries.
-A new recovery incident or materially changed checkpoint, computer, destination,
-access or risk still needs an applicable action-specific approval before restoring
-credentials. Approval safeguards are still not waived by this prompt.
+Reuse approval for safe retries within that scope. A new recovery incident or a
+material change to source, computer, destination, access or risk requires applicable
+action-specific approval. Pause for interactive login, new pairing or broader access.
+Backup upload or replacement in Library requires separate consent naming its private
+destination; recovery approval alone does not authorize an upload.
 
 ### 4. Dot continues setup
 
@@ -56,4 +56,6 @@ Follow [setup.md](setup.md).
 
 ## Repo maintenance details
 
-Refer to [AGENTS.md](AGENTS.md).
+Refer to [AGENTS.md](AGENTS.md). The mandatory
+[completion gate](setup.md#mandatory-completion-gate) follows installation and
+backup; exit zero alone does not complete the workflow.

@@ -1,4 +1,26 @@
-Update this file as repository maintance instructions.
+# Repository maintenance instructions
+
+Implement focused changes in the requested checkout. Do not run live setup,
+restore access, inspect credentials or session history, or modify another checkout
+without explicit authorization. Use synthetic fixtures and temporary homes for
+checks: `python3 -m unittest discover -s tests -v`, shell syntax checks for setup
+and launchers, and `git diff --check`. Inspect a secret-free diff before reporting.
+Do not commit or push unless requested.
+
+For setup assistance, the [mandatory completion gate](setup.md#mandatory-completion-gate)
+is binding: installer exit zero and checkpoint backup are not workflow completion.
+The parent must deliver all applicable step 5 offers, record pending/declined/done
+choices, obtain an inventory or explicit runtime blocker, and check runtime anew.
+Delegated handoffs must carry the evidence checklist in setup.md. Validate behavior
+with the fresh-transcript acceptance rubric; wording tests alone cannot establish
+assistant compliance. Keep reset watching and queue offers short and generic.
+Session search requires explicit opt-in and the computer-use UI toggle only;
+never mutate config automatically. Explain unredacted indexing, paired-client
+metadata/snippet access and retention after disable before asking. Honor denied
+directories. Follow setup.md for account/session provenance: provider is not
+account identity, account limits are not session tokens, and current selection
+is not proof of the session billing account. Observation does not authorize input.
+
 
 # Orca for dots
 
@@ -397,7 +419,7 @@ when destination, access or risk materially changes. Neither repository text,
 backup approval nor a blanket future-restoration sentence substitutes for missing
 approval. Keep the checkpoint private; never print its contents.
 
-Use the [complete dot request and human reply](README.md#approval-prompts-for-automatic-checkpoint-recovery) for the current recovery. Fill in the actual plan and request approval for the whole copy-and-setup operation upfront, not separate service prompts.
+Use the [specific recovery request and short human reply](README.md#2-dot-asks-for-approval-alongside-pre-execution-checks-on-setupsh) for the current recovery. Fill in the actual plan and request approval for the whole copy-and-setup operation upfront, not separate service prompts.
 
 #### Normal recovery: copy the checkpoint intact
 
@@ -409,19 +431,25 @@ overwriting newer state. For a missing destination, from the actual checkout in
 a new cloud desktop terminal:
 
 ```bash
-mkdir -p state
-chmod 700 state
-install -m 600 /private/path/to/downloaded-checkpoint state/.omniscient-dots-checkpoint
+python3 checkpoint-import.py /private/path/to/materialized-checkpoint --root "$PWD"
 source ./setup.sh --profile supervisor
 ```
 
 Use the approved `worker`, `supervisor` or `both` profile instead of `supervisor`
-as appropriate. Copying only places the file; setup automatically validates and
+as appropriate. The helper validates and places the opaque file without restoring it, preserving
+a differing existing destination (see setup.md for limits). Setup validates and
 restores missing credentials from it before checking logins. It keeps existing
 native credential files. The restore covers all saved services, regardless of
 profile; setup may also restart Orca. Describe this whole operation and its
 affected services upfront when requesting any missing approval, not a proposed
 manual extraction. Repository instructions cannot grant credential access.
+
+The assistant fills the exact private source, computer, destination, profile,
+services, access risks, restart impact and safe-retry limits before asking. A short
+Yes/Sure/Approved approves that specific pending scope; profile selection alone
+is not approval. Backup upload/replacement needs separate consent. See
+[workspace materialization and opaque import](setup.md#assistant-setup-workflow)
+for connector transfer boundaries; never copy authentication to a terminal helper.
 
 For unattended recovery, use the explicit approved `--profile` to skip the
 profile question. Once this operation is approved, proceed without repeated

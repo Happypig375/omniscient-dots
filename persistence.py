@@ -81,7 +81,7 @@ def route_payload(data):
         raise CheckpointError('A saved Orca route is invalid.') from None
 
 
-def read_checkpoint(path):
+def read_checkpoint(path, *, max_decoded_bytes=None):
     if not path.exists():
         return {}
     try:
@@ -93,7 +93,9 @@ def read_checkpoint(path):
         if data[:CHECKSUM_BYTES] != hashlib.sha256(payload).digest():
             raise ValueError
         stream = zlib.decompressobj(wbits=-zlib.MAX_WBITS)
-        data = stream.decompress(payload)
+        data = stream.decompress(payload, 0 if max_decoded_bytes is None else max_decoded_bytes + 1)
+        if max_decoded_bytes is not None and len(data) > max_decoded_bytes:
+            raise ValueError
         if not stream.eof or stream.unused_data:
             raise ValueError
         checkpoint = json.loads(data)

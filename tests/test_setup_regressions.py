@@ -118,7 +118,8 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(helper.profile_path(short), short)
 
     def test_readme_sources_all_profiles_in_cloud_terminal(self):
-        step = (REPO / 'README.md').read_text().split('4. After user choice,', 1)[1].split('5. ', 1)[0]
+        self.assertIn('[setup.md](setup.md)', (REPO / 'README.md').read_text())
+        step = (REPO / 'setup.md').read_text().split('## Mandatory completion gate', 1)[0]
         self.assertIn('on a new terminal on your cloud computer', step)
         for profile in ('worker', 'supervisor', 'both'):
             self.assertIn(f'`source ./setup.sh --profile {profile}`', step)
@@ -235,3 +236,18 @@ bash --noprofile --norc -c 'command -v codex'
         if process.poll() is None:
             process.terminate()
         process.wait(timeout=5)
+
+
+class FollowthroughDocumentationTests(unittest.TestCase):
+    def test_completion_and_coverage_contract(self):
+        text = (Path(__file__).resolve().parents[1] / 'setup.md').read_text()
+        for required in ('## Mandatory completion gate', 'hostScope.hostIds',
+                         'omittedHostIds', 'Why the setup command uses source'):
+            self.assertIn(required, text)
+
+    def test_short_approval_is_specific_and_profile_is_separate(self):
+        text = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
+        for required in ('**Yes**', '**Sure**', '**Approved**',
+                         'separate profile', 'separate consent',
+                         '[completion gate](setup.md#mandatory-completion-gate)'):
+            self.assertIn(required, text)

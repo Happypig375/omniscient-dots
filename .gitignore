@@ -8,6 +8,7 @@
 !/orca-locks.py
 !/orca-window.py
 !/persistence.py
+!/checkpoint-import.py
 !/tailscale-reuse.py
 !/tests/
 !/AGENTS.md
